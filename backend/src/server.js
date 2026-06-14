@@ -5,6 +5,7 @@ import { env } from './config/env.js';
 import { LOCAL_USER_ID } from './config/database.js';
 import { registerUploadSocket, unregisterUploadSocket } from './services/websocketHub.js';
 import { runDeltaSync, scheduleSync } from './services/syncService.js';
+import { startReplicationService } from './services/replicationService.js';
 
 function isNonFatalBackgroundError(error) {
 	const message = error?.message || String(error || '');
@@ -58,6 +59,7 @@ wss.on('connection', (socket, request) => {
 });
 
 scheduleSync();
+startReplicationService(15000); // scan every 15s
 if (env.appMode === 'local') {
 	runDeltaSync(LOCAL_USER_ID).catch((error) => {
 		console.error('Initial sync failed:', error);

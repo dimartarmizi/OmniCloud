@@ -17,6 +17,9 @@ import {
 	IconCheck,
 	IconChartPie,
 	IconAdjustments,
+	IconShieldCheck,
+	IconAlertTriangle,
+	IconInfoCircle,
 } from '@tabler/icons-vue';
 import DriveShell from '../components/DriveShell.vue';
 import MegaConnectModal from '../components/MegaConnectModal.vue';
@@ -27,13 +30,16 @@ import { useAccountManagementStore } from '../stores/accountManagement';
 import { api } from '../services/api';
 import { formatBytesStrict, providerIcon, providerLabel } from '../composables/useFormatFile.js';
 import { useStorageStats } from '../composables/useStorageStats.js';
+import { useSettingsStore } from '../stores/settings';
 
 const { t } = useI18n();
 const accountStore = useAccountManagementStore();
 const { accounts, isLoading, error, isDisconnectingId } = storeToRefs(accountStore);
+const settingsStore = useSettingsStore();
+const { replicationFactor } = storeToRefs(settingsStore);
 const route = useRoute();
 const router = useRouter();
-const { totalUsed, totalSpace, totalFree, usedFormatted, totalFormatted, freeFormatted, usedTotalLabel } = useStorageStats();
+const { totalUsed, totalSpace, totalFree, usedFormatted, totalFormatted, freeFormatted, usedTotalLabel, usableCapacity, usableFormatted, rawTotal, rawTotalFormatted, replicaOverhead, refreshCapacity } = useStorageStats();
 
 const connectingProvider = ref('');
 const actionError = ref('');
@@ -43,6 +49,56 @@ const isConnectMenuOpen = ref(false);
 const isMegaModalOpen = ref(false);
 const isPCloudModalOpen = ref(false);
 const isS3ModalOpen = ref(false);
+
+// RAID warning dialog state
+const raidWarning = ref(null); // { targetFactor, filesUnderRisk, spaceNeeded, totalFree, canFullyReplicate }
+const isRaidWarningOpen = ref(false);
+const isRaidPreviewLoading = ref(false);
+
+async function handleReplicationFactorChange(factor) {
+	if (factor === replicationFactor.value) return;
+	if (factor <= 1) {
+		// Downgrade to 1x: safe, no warning needed (Opsi B: replicas not deleted)
+		await settingsStore.updateReplicationFactor(factor);
+		await refreshCapacity();
+		return;
+	}
+
+	isRaidPreviewLoading.value = true;
+	try {
+		const { data } = await api.getCapacityPreview(factor);
+		raidWarning.value = {
+			targetFactor: factor,
+			filesUnderRisk: data.filesUnderRisk,
+			spaceNeeded: data.spaceNeededForFullReplication,
+			totalFreeSpace: data.totalFreeSpace,
+			projectedUsable: data.projectedUsable,
+			canFullyReplicate: data.canFullyReplicate,
+		};
+		if (!data.canFullyReplicate && data.filesUnderRisk > 0) {
+			isRaidWarningOpen.value = true;
+		} else {
+			await confirmRaidChange(factor);
+		}
+	} catch {
+		// If preview fails, just apply directly
+		await confirmRaidChange(factor);
+	} finally {
+		isRaidPreviewLoading.value = false;
+	}
+}
+
+async function confirmRaidChange(factor) {
+	isRaidWarningOpen.value = false;
+	await settingsStore.updateReplicationFactor(factor ?? raidWarning.value?.targetFactor);
+	await refreshCapacity();
+	raidWarning.value = null;
+}
+
+function cancelRaidChange() {
+	isRaidWarningOpen.value = false;
+	raidWarning.value = null;
+}
 
 const ALLOCATION_STRATEGIES = ['round_robin', 'weighted_round_robin', 'least_used', 'most_free', 'manual'];
 const activeTab = ref('overview');
@@ -537,6 +593,7 @@ async function handleOAuthRedirect() {
 onMounted(async () => {
 	await loadPage();
 	await handleOAuthRedirect();
+	await settingsStore.loadSettings();
 });
 </script>
 
@@ -596,6 +653,9 @@ onMounted(async () => {
 						<div>
 							<p class="text-sm text-[#5f6368] dark:text-slate-400">{{ t('storage.totalStorage') }}</p>
 							<strong class="text-xl">{{ usedTotalLabel }}</strong>
+							<p v-if="replicationFactor > 1" class="mt-1 text-xs text-[#5f6368] dark:text-slate-400">
+								Raw: {{ rawTotalFormatted }} &nbsp;·&nbsp; RAID overhead: {{ usableFormatted !== rawTotalFormatted ? rawTotalFormatted + ' − ' + usableFormatted : '' }}
+							</p>
 						</div>
 					</div>
 
@@ -608,6 +668,17 @@ onMounted(async () => {
 							<span class="text-[#5f6368] dark:text-slate-400">{{ t('storage.freeSpace') }}</span>
 							<strong>{{ freeFormatted }}</strong>
 						</div>
+						<template v-if="replicationFactor > 1">
+							<div class="my-2 border-t border-[#e0e3e7] dark:border-slate-700" />
+							<div class="flex items-center justify-between gap-3 text-indigo-600 dark:text-indigo-400">
+								<span class="flex items-center gap-1"><IconShieldCheck :size="13" :stroke="2" /> RAID Overhead</span>
+								<strong>{{ (replicaOverhead / 1024 / 1024).toFixed(1) }} MB</strong>
+							</div>
+							<div class="mt-1.5 flex items-center justify-between gap-3">
+								<span class="text-[#5f6368] dark:text-slate-400">Raw Total</span>
+								<strong>{{ rawTotalFormatted }}</strong>
+							</div>
+						</template>
 					</div>
 				</div>
 
@@ -727,6 +798,69 @@ onMounted(async () => {
 					<p v-if="allocationError" class="mt-3 rounded-2xl bg-[#fce8e6] px-4 py-3 text-sm text-[#c5221f] dark:bg-red-950/40 dark:text-red-300">{{ allocationError }}</p>
 				</template>
 			</section>
+
+			<section v-show="activeTab === 'allocation' && accounts.length" class="mb-6 rounded-[28px] border border-[#e0e3e7] bg-white p-5 dark:border-slate-700 dark:bg-slate-900/70">
+				<div class="flex flex-col gap-1">
+					<h2 class="text-lg font-medium">Cloud RAID Storage Redundancy</h2>
+					<p class="text-sm text-[#5f6368] dark:text-slate-400">Configure file replication settings for redundancy and resilience across cloud accounts.</p>
+				</div>
+
+				<div class="mt-5 grid gap-3 sm:grid-cols-3">
+					<button v-for="factor in [1, 2, 3]" :key="factor" type="button" class="flex flex-col gap-2 rounded-2xl border p-4 text-left transition" :class="replicationFactor === factor
+						? 'border-[#1a73e8] bg-[#e8f0fe] dark:border-sky-500 dark:bg-sky-950/30'
+						: 'border-[#e3e8ee] bg-[#f8fafd] hover:border-[#c7dafc] dark:border-slate-700 dark:bg-slate-800/70 dark:hover:border-sky-900/60'" :disabled="isRaidPreviewLoading" @click="handleReplicationFactorChange(factor)">
+						<span class="flex items-center justify-between gap-2">
+							<span class="text-sm font-semibold" :class="replicationFactor === factor ? 'text-[#1a73e8] dark:text-sky-300' : ''">{{ factor }}x Redundancy</span>
+							<IconCheck v-if="replicationFactor === factor" :size="18" :stroke="2.2" class="text-[#1a73e8] dark:text-sky-300" />
+						</span>
+						<span class="text-xs leading-relaxed text-[#5f6368] dark:text-slate-400">
+							{{ factor === 1 ? 'No redundancy (standard). File is uploaded to a single cloud account.' : factor === 2 ? 'RAID 1 (Mirroring). File is cloned to 2 different cloud accounts.' : 'RAID 1 (Mirroring). File is cloned to 3 different cloud accounts.' }}
+						</span>
+					</button>
+				</div>
+			</section>
+
+			<!-- RAID Warning Dialog -->
+			<Teleport to="body">
+				<div v-if="isRaidWarningOpen && raidWarning" class="fixed inset-0 z-[200] flex items-center justify-center bg-slate-950/60 px-4" @click.self="cancelRaidChange">
+					<div class="w-full max-w-md rounded-[28px] bg-white p-6 shadow-[0_24px_64px_rgba(32,33,36,0.32)] dark:bg-slate-800 dark:text-slate-100">
+						<div class="flex items-start gap-4">
+							<div class="grid size-12 shrink-0 place-items-center rounded-2xl bg-amber-100 text-amber-600 dark:bg-amber-950/40 dark:text-amber-400">
+								<IconAlertTriangle :size="24" :stroke="2" />
+							</div>
+							<div>
+								<h3 class="text-lg font-semibold">Kapasitas Mungkin Tidak Mencukupi</h3>
+								<p class="mt-1 text-sm text-[#5f6368] dark:text-slate-400">Mengaktifkan RAID {{ raidWarning.targetFactor }}× membutuhkan ruang tambahan untuk mereplikasi semua file yang ada.</p>
+							</div>
+						</div>
+
+						<div class="mt-5 rounded-2xl bg-amber-50 p-4 text-sm dark:bg-amber-950/20">
+							<div class="flex items-center justify-between gap-3">
+								<span class="text-[#5f6368] dark:text-slate-400">File berisiko</span>
+								<strong class="text-amber-700 dark:text-amber-400">{{ raidWarning.filesUnderRisk }} file</strong>
+							</div>
+							<div class="mt-2 flex items-center justify-between gap-3">
+								<span class="text-[#5f6368] dark:text-slate-400">Ruang dibutuhkan</span>
+								<strong>{{ (raidWarning.spaceNeeded / 1024 / 1024).toFixed(1) }} MB</strong>
+							</div>
+							<div class="mt-2 flex items-center justify-between gap-3">
+								<span class="text-[#5f6368] dark:text-slate-400">Ruang tersedia</span>
+								<strong :class="raidWarning.totalFreeSpace < raidWarning.spaceNeeded ? 'text-red-600 dark:text-red-400' : 'text-emerald-600 dark:text-emerald-400'">{{ (raidWarning.totalFreeSpace / 1024 / 1024).toFixed(1) }} MB</strong>
+							</div>
+						</div>
+
+						<div class="mt-4 rounded-2xl bg-[#f8fafd] p-4 text-xs text-[#5f6368] dark:bg-slate-900/60 dark:text-slate-400 flex items-start gap-2">
+							<IconInfoCircle :size="14" :stroke="2" class="mt-0.5 shrink-0" />
+							<span>File yang tidak bisa direplikasi akan ditandai <strong class="text-amber-600 dark:text-amber-400">"Partially Protected"</strong> dan akan diproses ulang ketika ada kapasitas tersedia.</span>
+						</div>
+
+						<div class="mt-6 flex items-center justify-end gap-3">
+							<button type="button" class="rounded-full border border-[#dadce0] px-4 py-2 text-sm text-[#5f6368] hover:bg-black/5 dark:border-slate-600 dark:text-slate-400 dark:hover:bg-white/8" @click="cancelRaidChange">Batalkan</button>
+							<button type="button" class="rounded-full bg-amber-500 px-4 py-2 text-sm font-medium text-white hover:bg-amber-600" @click="confirmRaidChange()">Lanjutkan Tetap</button>
+						</div>
+					</div>
+				</div>
+			</Teleport>
 
 			<p v-if="actionError || error" class="mb-4 rounded-2xl bg-[#fce8e6] px-4 py-3 text-sm text-[#c5221f] dark:bg-red-950/40 dark:text-red-300">{{ actionError || error }}</p>
 			<p v-if="actionSuccess" class="mb-4 rounded-2xl bg-[#e6f4ea] px-4 py-3 text-sm text-[#188038] dark:bg-emerald-950/40 dark:text-emerald-300">{{ actionSuccess }}</p>

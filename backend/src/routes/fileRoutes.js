@@ -1,6 +1,6 @@
 import { Router } from 'express';
-import { listFilesByPath, getFileById, getFileByRemoteId, listRecentFiles, listStarredFiles, searchFiles, setFileStarred, updateFileStarredByRemoteId } from '../services/fileService.js';
-import { getAccountById, getActiveAccounts } from '../services/accountService.js';
+import { listFilesByPath, getFileById, getFileByRemoteId, getFileParts, listRecentFiles, listStarredFiles, searchFiles, setFileStarred, updateFileStarredByRemoteId } from '../services/fileService.js';
+import { getAccountById, getActiveAccounts, updateAccountUsage } from '../services/accountService.js';
 import { createAdapter } from '../services/adapterRegistry.js';
 import { selectBestAccount } from '../services/spaceAllocator.js';
 import { syncAccount } from '../services/syncService.js';
@@ -107,13 +107,36 @@ async function getFileContext(userId, fileId) {
 		return getSharedFileContext(userId, fileId);
 	}
 
-	const account = getAccountById(userId, file.cloud_account_id);
+	let account = getAccountById(userId, file.cloud_account_id);
+	let useReplica = false;
+	let replicaPart = null;
+
+	if (!account || account.status !== 'active') {
+		const parts = getFileParts(file.id);
+		for (const part of parts) {
+			const candidateAccount = getAccountById(userId, part.cloud_account_id);
+			if (candidateAccount && candidateAccount.status === 'active') {
+				account = candidateAccount;
+				replicaPart = part;
+				useReplica = true;
+				break;
+			}
+		}
+	}
+
 	if (!account) {
 		return { file, account: null, adapter: null };
 	}
 
+	const fileWithReplica = useReplica ? {
+		...file,
+		cloud_account_id: replicaPart.cloud_account_id,
+		remote_file_id: replicaPart.remote_file_id,
+		remote_parent_id: replicaPart.remote_parent_id,
+	} : file;
+
 	return {
-		file,
+		file: fileWithReplica,
 		account,
 		adapter: createAdapter(account),
 	};
@@ -135,10 +158,29 @@ function ensureFileContext(context, res) {
 
 async function deleteContextFile(userId, context, rawId = context?.file?.id, options = {}) {
 	const { sync = true } = options;
-	await context.adapter.deleteFile(context.file);
+	const parts = getFileParts(rawId);
 
-	if (sync && context.account) {
-		await syncAccount(userId, context.account);
+	for (const part of parts) {
+		const account = getAccountById(userId, part.cloud_account_id);
+		if (account && account.status === 'active') {
+			try {
+				const adapter = createAdapter(account);
+				await adapter.deleteFile({
+					...context.file,
+					remote_file_id: part.remote_file_id,
+					remote_parent_id: part.remote_parent_id,
+				});
+
+				const nextUsedSpace = Math.max(0, Number(account.used_space) - Number(part.part_size));
+				updateAccountUsage(userId, account.id, nextUsedSpace);
+
+				if (sync) {
+					await syncAccount(userId, account);
+				}
+			} catch (error) {
+				console.error(`Failed to delete replica on account ${account.email}:`, error);
+			}
+		}
 	}
 }
 
@@ -344,8 +386,23 @@ router.patch('/files/:id/rename', async (req, res, next) => {
 			return;
 		}
 
-		await context.adapter.renameFile(context.file, name.trim());
-		await syncAccount(req.user.id, context.account);
+		const parts = getFileParts(req.params.id);
+		for (const part of parts) {
+			const account = getAccountById(req.user.id, part.cloud_account_id);
+			if (account && account.status === 'active') {
+				try {
+					const adapter = createAdapter(account);
+					await adapter.renameFile({
+						...context.file,
+						remote_file_id: part.remote_file_id,
+						remote_parent_id: part.remote_parent_id,
+					}, name.trim());
+					await syncAccount(req.user.id, account);
+				} catch (error) {
+					console.error(`Failed to rename replica on account ${account.email}:`, error);
+				}
+			}
+		}
 
 		return res.json({ data: { success: true } });
 	} catch (error) {
