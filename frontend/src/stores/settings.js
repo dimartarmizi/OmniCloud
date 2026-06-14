@@ -5,6 +5,7 @@ import { setLocale, getLocale, SUPPORTED_LOCALES } from '../i18n';
 
 export const useSettingsStore = defineStore('settings', () => {
 	const language = ref(getLocale());
+	const replicationFactor = ref(1);
 	const isLoading = ref(false);
 	const error = ref('');
 	const isInitialized = ref(false);
@@ -20,6 +21,9 @@ export const useSettingsStore = defineStore('settings', () => {
 			if (data?.language && SUPPORTED_LOCALES.includes(data.language)) {
 				language.value = data.language;
 				setLocale(data.language);
+			}
+			if (data?.replication_factor) {
+				replicationFactor.value = Math.min(3, Math.max(1, Number(data.replication_factor) || 1));
 			}
 			isInitialized.value = true;
 		} catch (err) {
@@ -44,12 +48,24 @@ export const useSettingsStore = defineStore('settings', () => {
 		}
 	}
 
+	async function updateReplicationFactor(newFactor) {
+		const parsed = Math.min(3, Math.max(1, Number(newFactor) || 1));
+		replicationFactor.value = parsed;
+		try {
+			await api.updateSettings({ replication_factor: String(parsed) });
+		} catch (err) {
+			console.warn('Could not save replication factor to backend:', err.message);
+		}
+	}
+
 	return {
 		language,
+		replicationFactor,
 		isLoading,
 		error,
 		isInitialized,
 		loadSettings,
 		updateLanguage,
+		updateReplicationFactor,
 	};
 });

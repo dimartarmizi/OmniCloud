@@ -1,6 +1,6 @@
 import { db } from '../config/database.js';
 
-const VALID_KEYS = ['language', 'theme'];
+const VALID_KEYS = ['language', 'theme', 'replication_factor'];
 
 export function getSetting(userId, key) {
 	if (!VALID_KEYS.includes(key)) {
@@ -13,7 +13,11 @@ export function getSetting(userId, key) {
 
 export function getSettings(userId) {
 	const rows = db.prepare('SELECT key, value FROM user_settings WHERE user_id = ?').all(userId);
-	const settings = {};
+	const settings = {
+		language: 'en',
+		theme: 'light',
+		replication_factor: '1',
+	};
 
 	for (const row of rows) {
 		settings[row.key] = row.value;

@@ -217,4 +217,10 @@ export const api = {
 			body: JSON.stringify(payload),
 		});
 	},
+	getCapacity() {
+		return request('/capacity');
+	},
+	getCapacityPreview(replicationFactor) {
+		return request(`/capacity-preview?replication_factor=${replicationFactor}`);
+	},
 };
