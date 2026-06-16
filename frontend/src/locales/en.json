@@ -61,10 +61,15 @@
 		"yes": "Yes",
 		"no": "No",
 		"confirm": "Confirm",
+		"create": "Create",
 		"success": "Success",
 		"error": "Error",
 		"retry": "Retry",
-		"name": "Name"
+		"name": "Name",
+		"copyId": "Copy ID",
+		"copied": "Copied",
+		"move": "Move",
+		"moveHere": "Move here"
 	},
 	"nav": {
 		"home": "Home",
@@ -91,7 +96,8 @@
 		"uploadFile": "Upload File",
 		"uploadFolder": "Upload Folder",
 		"storage": "Storage",
-		"storageUsed": "{used} of {total} used"
+		"storageUsed": "{used} of {total} used",
+		"connectAccountFirst": "Connect a storage account first"
 	},
 	"home": {
 		"subtitle": "Cloud accounts",
@@ -126,6 +132,14 @@
 	},
 	"drive": {
 		"title": "My Drive",
+		"rootName": "My Drive",
+		"dropToUpload": "Drop files here to upload",
+		"dropToUploadDesc": "Files and folders will be uploaded to the current Drive location.",
+		"emptyTitle": "This folder is empty",
+		"emptyHint": "Upload a file or drag and drop one here to get started.",
+		"noAccountTitle": "No storage account connected",
+		"noAccountHint": "Connect a cloud storage account before uploading. Your files need a provider to be stored on.",
+		"connectAccountCta": "Connect an account",
 		"starredTitle": "Starred",
 		"starredSubtitle": "Files marked with a star from all supported providers.",
 		"uploadPipeline": "Upload pipeline",
@@ -142,6 +156,11 @@
 		"rename": "Rename",
 		"deleteConfirm": "Delete {name}?",
 		"deleteConfirmDesc": "Item will be moved to trash.",
+		"moveTitle": "Move to...",
+		"moveDescription": "Choose a destination folder for \"{name}\".",
+		"moveUp": "Back",
+		"moveNoSubfolders": "No subfolders here.",
+		"moveSuccess": "Moved successfully.",
 		"details": "Details",
 		"preview": "Preview",
 		"star": "Star",
@@ -419,5 +438,26 @@
 		"notAvailable": "Preview is not available for this file type.",
 		"document": "Document preview",
 		"failed": "Preview failed to load. Some provider files are not compatible with lightweight preview."
+	},
+	"settings": {
+		"title": "Settings",
+		"account": "Account",
+		"signedInAs": "Signed in as",
+		"localModeNotice": "Account management is available in hosted mode only. This instance runs in local mode without sign-in.",
+		"changePassword": "Change password",
+		"currentPassword": "Current password",
+		"newPassword": "New password",
+		"confirmPassword": "Confirm new password",
+		"passwordHint": "Use at least 8 characters.",
+		"passwordMismatch": "Passwords do not match.",
+		"updatePassword": "Update password",
+		"passwordChanged": "Password updated successfully.",
+		"passwordChangeFailed": "Could not change password.",
+		"deleteAccount": "Delete account",
+		"deleteAccountWarning": "This permanently deletes your account, disconnects all linked cloud providers, and removes your file index. This cannot be undone.",
+		"confirmWithPassword": "Enter your password to confirm",
+		"deletePasswordRequired": "Please enter your password to continue.",
+		"deleteAccountConfirm": "Are you sure you want to permanently delete your account?",
+		"deleteAccountFailed": "Could not delete account."
 	}
 }

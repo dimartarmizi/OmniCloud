@@ -2,7 +2,6 @@ import { Readable } from 'stream';
 import {
 	S3Client,
 	ListObjectsV2Command,
-	HeadBucketCommand,
 	GetObjectCommand,
 	DeleteObjectCommand,
 	CopyObjectCommand,
@@ -44,6 +43,7 @@ export class S3Adapter extends BaseCloudAdapter {
 		super(account);
 		this.clientCache = null;
 		this.bucketCache = null;
+		this.objectsCache = null;
 	}
 
 	readCredentials() {
@@ -75,6 +75,17 @@ export class S3Adapter extends BaseCloudAdapter {
 	}
 
 	async listAllObjects() {
+		// Within a single sync cycle the adapter instance is reused: syncService
+		// calls fetchStructure() then getStorageSummary() on the same instance.
+		// Both need the full object listing, so we paginate the entire bucket once
+		// and memoize it here. Without this cache each sync would walk the whole
+		// bucket twice (2x ListObjectsV2 round-trips and 2x egress on large
+		// buckets). The cache lives only as long as the adapter instance, so a
+		// fresh sync still sees fresh data.
+		if (this.objectsCache) {
+			return this.objectsCache;
+		}
+
 		const { client, bucket } = this.getClient();
 		const objects = [];
 		let continuationToken;
@@ -90,6 +101,7 @@ export class S3Adapter extends BaseCloudAdapter {
 			continuationToken = response.IsTruncated ? response.NextContinuationToken : undefined;
 		} while (continuationToken);
 
+		this.objectsCache = objects;
 		return objects;
 	}
 
@@ -214,7 +226,7 @@ export class S3Adapter extends BaseCloudAdapter {
 		};
 	}
 
-	async getDownloadStream(fileRecord) {
+	async getDownloadStream(fileRecord, { range } = {}) {
 		const { client, bucket } = this.getClient();
 		const key = fileRecord.remote_file_id || toKey(fileRecord.virtual_path, fileRecord.file_name);
 
@@ -222,6 +234,10 @@ export class S3Adapter extends BaseCloudAdapter {
 			new GetObjectCommand({
 				Bucket: bucket,
 				Key: key,
+				// S3 understands the standard HTTP byte-range form; forwarding it
+				// lets the provider return only the requested slice (206) instead
+				// of us downloading the whole object to serve a seek.
+				...(range ? { Range: `bytes=${range.start}-${range.end}` } : {}),
 			}),
 		);
 
@@ -266,6 +282,33 @@ export class S3Adapter extends BaseCloudAdapter {
 				Key: key,
 			}),
 		);
+	}
+
+	async moveFile(fileRecord, targetVirtualPath) {
+		const { client, bucket } = this.getClient();
+		const fromKey = fileRecord.remote_file_id || toKey(fileRecord.virtual_path, fileRecord.file_name);
+		// S3 has no native move: copy the object to the destination key then
+		// delete the source. Keeps the same file name under the new prefix.
+		const toKeyName = toKey(targetVirtualPath, fileRecord.file_name);
+		if (toKeyName === fromKey) {
+			return { remoteFileId: fromKey, remoteParentId: normalizeVirtualPath(targetVirtualPath) };
+		}
+
+		await client.send(
+			new CopyObjectCommand({
+				Bucket: bucket,
+				CopySource: `${bucket}/${fromKey}`,
+				Key: toKeyName,
+			}),
+		);
+		await client.send(
+			new DeleteObjectCommand({
+				Bucket: bucket,
+				Key: fromKey,
+			}),
+		);
+
+		return { remoteFileId: toKeyName, remoteParentId: normalizeVirtualPath(targetVirtualPath) };
 	}
 
 	async getFileDetails(fileRecord) {

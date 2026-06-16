@@ -21,7 +21,7 @@ function closeModal() {
 <template>
 	<Transition enter-active-class="transition duration-200 ease-out" enter-from-class="opacity-0" enter-to-class="opacity-100" leave-active-class="transition duration-150 ease-in" leave-from-class="opacity-100" leave-to-class="opacity-0">
 		<div v-if="open" class="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/45 px-4 py-8 backdrop-blur-sm" @click.self="closeModal">
-			<div class="relative flex max-h-[calc(100vh-2rem)] w-full max-w-xl flex-col overflow-hidden rounded-[28px] border border-[#dfe6f1] bg-white shadow-[0_28px_80px_rgba(15,23,42,0.28)] sm:max-h-[calc(100vh-4rem)] sm:rounded-[30px] dark:border-slate-700 dark:bg-slate-900 dark:shadow-[0_28px_80px_rgba(2,6,23,0.65)]">
+			<div class="relative flex max-h-[calc(100vh-2rem)] w-full max-w-xl flex-col overflow-hidden rounded-[14px] border border-[#dfe6f1] bg-white shadow-[0_28px_80px_rgba(15,23,42,0.28)] sm:max-h-[calc(100vh-4rem)] sm:rounded-[16px] dark:border-slate-700 dark:bg-slate-900 dark:shadow-[0_28px_80px_rgba(2,6,23,0.65)]">
 				<button type="button" class="absolute right-4 top-4 z-10 grid size-10 place-items-center rounded-full text-[#5f6368] transition hover:bg-black/5 dark:text-slate-300 dark:hover:bg-white/10" :aria-label="t('common.close')" @click="closeModal">
 					<IconX :size="20" :stroke="2" />
 				</button>
@@ -33,12 +33,12 @@ function closeModal() {
 
 				<div class="space-y-5 overflow-y-auto p-5 sm:p-6 dark:bg-[radial-gradient(circle_at_top,_rgba(59,130,246,0.18),_transparent_58%)]">
 					<div class="flex flex-col items-center text-center">
-						<img :src="dimarTarmiziPhoto" alt="Dimar Tarmizi" class="size-24 rounded-[28px] object-cover shadow-[0_16px_32px_rgba(15,23,42,0.18)] ring-4 ring-white dark:ring-slate-900" />
+						<img :src="dimarTarmiziPhoto" alt="Dimar Tarmizi" class="size-24 rounded-[14px] object-cover shadow-[0_16px_32px_rgba(15,23,42,0.18)] ring-4 ring-white dark:ring-slate-900" />
 						<h3 class="mt-4 text-2xl font-semibold text-[#202124] dark:text-slate-100">Dimar Tarmizi</h3>
 						<p class="mt-1 max-w-md text-sm leading-6 text-[#5f6368] dark:text-slate-400">Learning &amp; building as I go, making stuff that’s useful and awesome</p>
 					</div>
 
-					<div class="rounded-[26px] border border-[#e7edf6] bg-[#f8fafd] p-4 dark:border-slate-800 dark:bg-slate-800/70">
+					<div class="rounded-[14px] border border-[#e7edf6] bg-[#f8fafd] p-4 dark:border-slate-800 dark:bg-slate-800/70">
 						<div class="mb-3 flex items-center justify-between gap-3">
 							<div>
 								<h4 class="text-sm font-semibold text-[#202124] dark:text-slate-100">{{ t('profile.letsConnect') }}</h4>
@@ -76,7 +76,7 @@ function closeModal() {
 						</div>
 					</div>
 
-					<div class="flex flex-col items-start gap-3 rounded-[24px] border border-[#e7edf6] bg-white px-4 py-3 sm:flex-row sm:items-center sm:justify-between dark:border-slate-800 dark:bg-slate-800/60">
+					<div class="flex flex-col items-start gap-3 rounded-[12px] border border-[#e7edf6] bg-white px-4 py-3 sm:flex-row sm:items-center sm:justify-between dark:border-slate-800 dark:bg-slate-800/60">
 						<div>
 							<p class="text-sm font-semibold text-[#202124] dark:text-slate-100">{{ t('profile.openSource') }}</p>
 							<p class="mt-1 text-xs text-[#5f6368] dark:text-slate-400">{{ t('profile.madeWith') }}</p>

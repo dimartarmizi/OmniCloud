@@ -1,9 +1,21 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { runMigrations } from './migrations.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// In hosted (multi-user) mode the database must live on an explicit, persistent
+// path — never defaulted next to the source tree where it is easy to lose or
+// accidentally commit. Fail fast so a misconfigured production deploy is caught
+// at boot instead of silently writing to backend/omnicloud.db.
+if (process.env.APP_MODE === 'hosted' && !process.env.DATABASE_PATH) {
+	throw new Error(
+		'DATABASE_PATH is required when APP_MODE=hosted. Set it to a persistent location (e.g. /app/data/omnicloud.db).',
+	);
+}
+
 const dbPath = process.env.DATABASE_PATH || path.resolve(__dirname, '../../omnicloud.db');
 
 export const LOCAL_USER_ID = 'local-default-user';
@@ -13,88 +25,12 @@ export const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id TEXT PRIMARY KEY,
-    email TEXT NOT NULL UNIQUE,
-    password_hash TEXT NOT NULL DEFAULT '',
-    is_local INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE TABLE IF NOT EXISTS auth_sessions (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    token_hash TEXT NOT NULL UNIQUE,
-    expires_at TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    last_used_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-  );
-
-  CREATE TABLE IF NOT EXISTS cloud_accounts (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    email TEXT NOT NULL,
-    provider TEXT NOT NULL,
-    encrypted_credentials TEXT NOT NULL,
-    total_space INTEGER NOT NULL,
-    used_space INTEGER NOT NULL,
-    status TEXT NOT NULL CHECK (status IN ('active', 'suspended', 'invalid_token')),
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-  );
-
-  CREATE TABLE IF NOT EXISTS file_metadata (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    virtual_path TEXT NOT NULL,
-    file_name TEXT NOT NULL,
-    is_folder INTEGER NOT NULL DEFAULT 0,
-	is_starred INTEGER NOT NULL DEFAULT 0,
-    size INTEGER NOT NULL DEFAULT 0,
-    mime_type TEXT,
-    cloud_account_id TEXT NOT NULL,
-    remote_file_id TEXT NOT NULL,
-    remote_parent_id TEXT,
-    remote_created_time TEXT,
-    remote_modified_time TEXT,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(cloud_account_id) REFERENCES cloud_accounts(id) ON DELETE CASCADE,
-    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-  );
-
-  CREATE TABLE IF NOT EXISTS user_settings (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    key TEXT NOT NULL,
-    value TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-  );
-`);
+// Apply schema migrations in order. Replaces the previous inline CREATE TABLE
+// IF NOT EXISTS block, giving a real path to evolve the schema on existing
+// databases. A migration failure throws here and aborts boot by design.
+runMigrations(db);
 
 db.prepare(`
   INSERT OR IGNORE INTO users (id, email, password_hash, is_local)
   VALUES (?, ?, '', 1)
 `).run(LOCAL_USER_ID, LOCAL_USER_EMAIL);
-
-db.exec(`
-  CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_id ON auth_sessions(user_id);
-  CREATE UNIQUE INDEX IF NOT EXISTS idx_cloud_accounts_user_provider_email
-    ON cloud_accounts(user_id, provider, email);
-  CREATE INDEX IF NOT EXISTS idx_cloud_accounts_user_id
-    ON cloud_accounts(user_id);
-  CREATE INDEX IF NOT EXISTS idx_file_virtual_path ON file_metadata(user_id, virtual_path);
-  CREATE INDEX IF NOT EXISTS idx_file_remote_id ON file_metadata(user_id, remote_file_id);
-  CREATE UNIQUE INDEX IF NOT EXISTS idx_file_account_remote_id
-    ON file_metadata(cloud_account_id, remote_file_id);
-  CREATE INDEX IF NOT EXISTS idx_file_user_account_id
-    ON file_metadata(user_id, cloud_account_id);
-  CREATE UNIQUE INDEX IF NOT EXISTS idx_user_settings_user_key
-    ON user_settings(user_id, key);
-`);

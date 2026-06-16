@@ -183,9 +183,13 @@ export class MegaAdapter extends BaseCloudAdapter {
 	}
 
 	async fetchStructure() {
+		// getStorage() already returns a storage with a fully loaded file tree:
+		// the session path calls loadFileTree() and the password path uses
+		// autoload before resolving `ready`. The previous extra loadFileTree()
+		// here triggered a SECOND full account reload (network + decrypt of the
+		// whole tree) on every sync. A fresh adapter instance is created per sync
+		// cycle, so the tree is already current — the reload was pure duplicate work.
 		const storage = await this.getStorage();
-
-		await this.loadFileTree(storage);
 
 		const files = Object.values(storage.files || {});
 
@@ -243,10 +247,18 @@ export class MegaAdapter extends BaseCloudAdapter {
 		};
 	}
 
-	async getDownloadStream(fileRecord) {
+	async getDownloadStream(fileRecord, { range } = {}) {
 		const file = await this.findByRecord(fileRecord);
 		if (file.directory) {
 			throw new Error('Folders cannot be downloaded directly from MEGA');
+		}
+
+		// megajs supports byte-range downloads via start/end options, so a seek
+		// fetches only the requested slice instead of the whole file. `end` is
+		// inclusive in our range model and exclusive-by-default in some APIs, so
+		// pass end + 1 which megajs treats as the (exclusive) stop offset.
+		if (range) {
+			return file.download({ start: range.start, end: range.end + 1 });
 		}
 
 		return file.download({});
@@ -256,6 +268,14 @@ export class MegaAdapter extends BaseCloudAdapter {
 		const file = await this.findByRecord(fileRecord);
 		await file.rename(nextName);
 		this.invalidateStorage();
+	}
+
+	async moveFile(fileRecord, targetVirtualPath) {
+		const file = await this.findByRecord(fileRecord);
+		const targetFolder = await this.ensureRemotePath(targetVirtualPath);
+		await file.moveTo(targetFolder);
+		this.invalidateStorage();
+		return { remoteParentId: targetFolder.nodeId || null };
 	}
 
 	async deleteFile(fileRecord) {

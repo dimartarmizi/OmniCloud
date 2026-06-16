@@ -2,6 +2,8 @@
   "name": "backend",
   "private": true,
   "version": "1.0.0",
+  "description": "OmniCloud API server (Express, SQLite, provider adapters).",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "node --watch src/server.js",

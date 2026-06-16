@@ -1,17 +1,22 @@
 import dotenv from 'dotenv';
-import os from 'os';
 import crypto from 'crypto';
 
 dotenv.config();
 
-const machineFingerprint = crypto
-	.createHash('sha256')
-	.update(`${os.hostname()}|${os.platform()}|${os.arch()}`)
-	.digest('hex');
-
-const envHalf = process.env.OMNICLOUD_SECRET_HALF || 'omnicloud-dev-secret-half';
-const derivedKeyMaterial = `${envHalf}:${machineFingerprint}`;
-const encryptionKey = crypto.createHash('sha256').update(derivedKeyMaterial).digest();
+// The credential-encryption key is derived only from a stable, operator-supplied
+// secret — never from machine attributes (hostname/platform/arch). A container's
+// hostname changes on every recreation, so folding it into the key meant every
+// stored provider credential became undecryptable after a Docker redeploy even
+// though the SQLite volume persisted. Prefer a dedicated OMNICLOUD_ENCRYPTION_KEY;
+// fall back to OMNICLOUD_SECRET_HALF for backward compatibility.
+//
+// NOTE: changing this derivation invalidates credentials encrypted with the old
+// machine-bound key. Affected accounts simply need to be reconnected once.
+const encryptionSecret =
+	process.env.OMNICLOUD_ENCRYPTION_KEY ||
+	process.env.OMNICLOUD_SECRET_HALF ||
+	'omnicloud-dev-secret-half';
+const encryptionKey = crypto.createHash('sha256').update(encryptionSecret).digest();
 
 export const env = {
 	port: Number(process.env.PORT || 8787),
@@ -20,6 +25,10 @@ export const env = {
 	syncIntervalMinutes: Number(process.env.SYNC_INTERVAL_MINUTES || 5),
 	authCookieName: process.env.AUTH_COOKIE_NAME || 'omnicloud_session',
 	authSessionTtlHours: Number(process.env.AUTH_SESSION_TTL_HOURS || 24 * 14),
+	authCookieSecure:
+		process.env.AUTH_COOKIE_SECURE !== undefined
+			? process.env.AUTH_COOKIE_SECURE === 'true'
+			: process.env.APP_MODE === 'hosted',
 	authSecret: process.env.AUTH_SECRET || process.env.OMNICLOUD_SECRET_HALF || 'omnicloud-dev-auth-secret',
 	encryptionKey,
 	frontendUrl: process.env.FRONTEND_URL || process.env.CORS_ORIGIN || 'http://localhost:5173',

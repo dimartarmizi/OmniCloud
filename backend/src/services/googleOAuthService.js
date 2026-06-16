@@ -1,10 +1,9 @@
-import { randomUUID } from 'crypto';
 import { google } from 'googleapis';
 import { env } from '../config/env.js';
-import { upsertCloudAccount } from './accountService.js';
-import { syncAccount } from './syncService.js';
+import { createOAuthStateStore } from '../utils/oauthStateStore.js';
+import { beginOAuthFlow, completeOAuthLink } from '../utils/oauthFlowHelper.js';
 
-const oauthStates = new Map();
+const oauthStates = createOAuthStateStore();
 
 
 function readGoogleCredentials() {
@@ -49,8 +48,7 @@ export function getGoogleIntegrationStatus() {
 
 export function createGoogleAuthorizationRequest(userId) {
 	const oauthClient = createOAuthClient();
-	const state = randomUUID();
-	oauthStates.set(state, { userId, createdAt: Date.now() });
+	const state = beginOAuthFlow(oauthStates, userId);
 
 	const authorizationUrl = oauthClient.generateAuthUrl({
 		access_type: 'offline',
@@ -73,51 +71,38 @@ export function createGoogleAuthorizationRequest(userId) {
 }
 
 export async function completeGoogleAccountLink({ code, state }) {
-	if (!code || !state) {
-		throw new Error('Missing Google OAuth code or state');
-	}
-
-	const authState = oauthStates.get(state);
-	if (!authState) {
-		throw new Error('Invalid or expired Google OAuth state');
-	}
-
-	oauthStates.delete(state);
-
-	const oauthClient = createOAuthClient();
-	const { tokens } = await oauthClient.getToken(code);
-	oauthClient.setCredentials(tokens);
-
-	const profile = await fetchDriveProfile(oauthClient);
-	if (!profile.email) {
-		throw new Error('Unable to read Google account email');
-	}
-
-	const account = upsertCloudAccount({
-		userId: authState.userId,
-		id: randomUUID(),
-		email: profile.email,
+	return completeOAuthLink({
+		store: oauthStates,
 		provider: 'google_drive',
-		credentials: {
-			provider: 'google_drive',
-			clientId: oauthClient._clientId,
-			clientSecret: oauthClient._clientSecret,
-			redirectUri: env.googleRedirectUri,
-			refreshToken: tokens.refresh_token || null,
-			accessToken: tokens.access_token || null,
-			expiryDate: tokens.expiry_date || null,
-			scope: tokens.scope || null,
-			tokenType: tokens.token_type || null,
+		providerLabel: 'Google',
+		code,
+		state,
+		exchange: async (authorizationCode) => {
+			const oauthClient = createOAuthClient();
+			const { tokens } = await oauthClient.getToken(authorizationCode);
+			oauthClient.setCredentials(tokens);
+
+			const profile = await fetchDriveProfile(oauthClient);
+
+			return {
+				account: {
+					email: profile.email,
+					credentials: {
+						provider: 'google_drive',
+						clientId: oauthClient._clientId,
+						clientSecret: oauthClient._clientSecret,
+						redirectUri: env.googleRedirectUri,
+						refreshToken: tokens.refresh_token || null,
+						accessToken: tokens.access_token || null,
+						expiryDate: tokens.expiry_date || null,
+						scope: tokens.scope || null,
+						tokenType: tokens.token_type || null,
+					},
+					total_space: profile.totalSpace,
+					used_space: profile.usedSpace,
+				},
+				profile,
+			};
 		},
-		total_space: profile.totalSpace,
-		used_space: profile.usedSpace,
-		status: 'active',
 	});
-
-	await syncAccount(authState.userId, account);
-
-	return {
-		account,
-		profile,
-	};
 }

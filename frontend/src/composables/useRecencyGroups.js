@@ -1,5 +1,5 @@
 import { computed } from 'vue';
-import { resolveRecencyGroup } from './useRecency.js';
+import { createRecencyResolver } from './useRecency.js';
 import { getCreatedTime, getModifiedTime } from './useFormatFile.js';
 
 export function useRecencyGroups(files, t) {
@@ -16,8 +16,11 @@ export function useRecencyGroups(files, t) {
 			older: { key: 'older', label: t('recent.older'), items: [] },
 		};
 
+		// Compute the date-range boundaries once for the whole pass instead of
+		// rebuilding them inside resolveRecencyGroup for every file.
+		const resolveRecency = createRecencyResolver();
 		for (const file of files.value) {
-			const key = resolveRecencyGroup(getModifiedTime(file) || getCreatedTime(file));
+			const key = resolveRecency(getModifiedTime(file) || getCreatedTime(file));
 			groupsByKey[key]?.items.push(file);
 		}
 

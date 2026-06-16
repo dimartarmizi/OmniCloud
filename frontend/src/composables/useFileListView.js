@@ -5,7 +5,7 @@ import { useFileFiltersUi } from './useFileFiltersUi.js';
 import { useFileActions } from './useFileActions.js';
 import { useFileActionProgress } from './useFileActionProgress.js';
 import { getFileCategory } from './useFileType.js';
-import { matchesUpdatedFilter } from './useFileFilters.js';
+import { createUpdatedFilterPredicate } from './useFileFilters.js';
 
 export function useFileListView({
 	loadFiles,
@@ -93,61 +93,78 @@ export function useFileListView({
 
 	const filteredFiles = computed(() => {
 		const source = sourceFiles ? sourceFiles.value : files.value;
+
+		// Hoist all loop-invariant work out of the per-file predicate: the search
+		// query is normalized once, and the date-range filter is compiled once so
+		// its ~7 boundary Date objects are not rebuilt for every file. For N files
+		// this turns O(N) redundant allocations/normalizations into O(1) setup.
+		const query = searchTerm.value.trim().toLowerCase();
+		const applySearch = Boolean(query) && !sourceFiles;
+		const typeFilter = selectedTypeFilter.value;
+		const ownerFilter = selectedOwnerFilter.value;
+		const updatedFilter = selectedUpdatedFilter.value;
+		const matchesUpdated = createUpdatedFilterPredicate(updatedFilter);
+
 		return source.filter((file) => {
-			const query = searchTerm.value.trim().toLowerCase();
-			if (query && !sourceFiles) {
+			if (applySearch) {
 				const matchesQuery = [file.file_name, file.email, file.provider, file.virtual_path]
 					.filter(Boolean)
 					.some((value) => String(value).toLowerCase().includes(query));
 				if (!matchesQuery) return false;
 			}
-			const typeMatches = selectedTypeFilter.value === 'all' || getFileCategory(file) === selectedTypeFilter.value;
-			const ownerMatches = selectedOwnerFilter.value === 'all' || `${file.provider || 'unknown'}::${file.email}` === selectedOwnerFilter.value;
-			const updatedMatches = selectedUpdatedFilter.value === 'all'
-				|| matchesUpdatedFilter(new Date(file.modifiedTime || file.createdTime || 0), selectedUpdatedFilter.value);
+			const typeMatches = typeFilter === 'all' || getFileCategory(file) === typeFilter;
+			const ownerMatches = ownerFilter === 'all' || `${file.provider || 'unknown'}::${file.email}` === ownerFilter;
+			const updatedMatches = updatedFilter === 'all'
+				|| matchesUpdated(file.modifiedTime || file.createdTime || 0);
 			return typeMatches && ownerMatches && updatedMatches;
 		});
 	});
 
 	const sortedFiles = computed(() => {
-		const items = [...filteredFiles.value];
+		const source = filteredFiles.value;
+
+		// Decorate-sort-undecorate: precompute each item's sort key exactly once
+		// (O(n)) instead of recomputing it inside the comparator, which runs
+		// O(n log n) times. This removes repeated Date parsing / string casing on
+		// every search keystroke, filter change, and data refresh. Ordering is
+		// identical to the previous inline comparator.
 		if (!sortable) {
-			return items.sort((a, b) => {
-				const left = new Date(a.modifiedTime || a.createdTime || 0).getTime();
-				const right = new Date(b.modifiedTime || b.createdTime || 0).getTime();
-				if (left !== right) return right - left;
-				return (a.file_name || '').localeCompare(b.file_name || '', 'id');
+			const decorated = source.map((file) => ({
+				file,
+				time: new Date(file.modifiedTime || file.createdTime || 0).getTime(),
+			}));
+			decorated.sort((a, b) => {
+				if (a.time !== b.time) return b.time - a.time;
+				return (a.file.file_name || '').localeCompare(b.file.file_name || '', 'id');
 			});
+			return decorated.map((entry) => entry.file);
 		}
+
 		const direction = sortDirection.value === 'asc' ? 1 : -1;
-		return items.sort((a, b) => {
-			if (a.is_folder !== b.is_folder) return a.is_folder ? -1 : 1;
-			let leftValue;
-			let rightValue;
-			switch (sortBy.value) {
+		const field = sortBy.value;
+		const keyOf = (file) => {
+			switch (field) {
 				case 'file_name':
-					leftValue = (a.display_name || a.file_name || '').toLowerCase();
-					rightValue = (b.display_name || b.file_name || '').toLowerCase();
-					break;
+					return (file.display_name || file.file_name || '').toLowerCase();
 				case 'email':
-					leftValue = (a.email || '').toLowerCase();
-					rightValue = (b.email || '').toLowerCase();
-					break;
+					return (file.email || '').toLowerCase();
 				case 'size':
-					leftValue = Number(a.size || 0);
-					rightValue = Number(b.size || 0);
-					break;
+					return Number(file.size || 0);
 				case 'modified_at':
 				case 'updated_at':
 				default:
-					leftValue = new Date(a.modifiedTime || a.createdTime || 0).getTime();
-					rightValue = new Date(b.modifiedTime || b.createdTime || 0).getTime();
-					break;
+					return new Date(file.modifiedTime || file.createdTime || 0).getTime();
 			}
-			if (leftValue < rightValue) return -1 * direction;
-			if (leftValue > rightValue) return 1 * direction;
+		};
+
+		const decorated = source.map((file) => ({ file, key: keyOf(file) }));
+		decorated.sort((a, b) => {
+			if (a.file.is_folder !== b.file.is_folder) return a.file.is_folder ? -1 : 1;
+			if (a.key < b.key) return -1 * direction;
+			if (a.key > b.key) return 1 * direction;
 			return 0;
 		});
+		return decorated.map((entry) => entry.file);
 	});
 
 	function setSort(field) {

@@ -60,8 +60,12 @@ export async function pcloudLogin({ username, password }) {
 			};
 		} catch (error) {
 			lastError = error;
-			if (error.result && ![2321, 2330, 4000].includes(error.result)) {
-				if (error.result === 2000) break;
+			// pCloud result 2000 means "login failed" (bad credentials): the same
+			// answer comes from every host, so stop trying other regions. Any other
+			// error (network, transient, or region-specific) falls through to retry
+			// against the next host.
+			if (error.result === 2000) {
+				break;
 			}
 		}
 	}

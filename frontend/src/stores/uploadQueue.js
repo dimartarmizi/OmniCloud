@@ -177,60 +177,119 @@ export const useUploadQueueStore = defineStore('uploadQueue', {
 			const batchTotal = downloadableFiles.length;
 
 			for (const file of downloadableFiles) {
-			const abortController = new AbortController();
+				// Trigger a native browser download via an anchor instead of
+				// fetching the whole file into a Blob in memory. The browser
+				// streams the response straight to disk (no in-tab buffering, so
+				// multi-GB files no longer risk an OOM), and the request carries
+				// the auth cookie since the endpoint is same-origin. The tradeoff
+				// is that we can't render byte-level progress for downloads, so the
+				// queue item reflects "started → completed" rather than a percentage.
+				const queueItem = this.registerOperation({
+					type: 'download',
+					name: file.display_name || file.file_name,
+					size: file.size || 0,
+					status: 'downloading',
+					progress: 100,
+					batchId,
+					batchTotal,
+				});
 
-			const queueItem = this.registerOperation({
-				type: 'download',
-				name: file.display_name || file.file_name,
-				size: file.size || 0,
-				status: 'downloading',
-				abortController,
-				batchId,
-				batchTotal,
-			});
+				try {
+					const link = document.createElement('a');
+					link.href = api.downloadUrl(file.id);
+					link.download = file.display_name || file.file_name || 'download';
+					link.rel = 'noopener';
+					document.body.appendChild(link);
+					link.click();
+					link.remove();
+
+					this.updateUpload(queueItem.id, {
+						progress_percentage: 100,
+						status: 'completed',
+					});
+				} catch (error) {
+					this.updateUpload(queueItem.id, {
+						status: 'failed',
+						error: error.message,
+					});
+					if (batchTotal === 1) throw error;
+				}
+			}
+		},
+		async uploadFiles(files, currentPath, onCompleted) {
+			const entries = Array.from(files || []);
+			const batchId = createBatchId();
+			const batchTotal = entries.length;
+
+			for (const rawEntry of entries) {
+				const { file, relativePath } = normalizeUploadEntry(rawEntry);
+				const queueItem = this.registerUpload(file, currentPath, relativePath, { batchId, batchTotal });
+				await this.runUpload(queueItem, onCompleted);
+			}
+		},
+		// Run (or re-run) a single registered upload queue item. Extracted so both
+		// the initial batch and retryUpload share one implementation.
+		async runUpload(queueItem, onCompleted) {
+			const { file, currentPath, name: relativePath } = queueItem;
+			const targetPath = buildVirtualPath(currentPath, relativePath);
 
 			try {
-				const response = await fetch(api.downloadUrl(file.id), { signal: abortController.signal });
-				if (!response.ok) {
-					const payload = await response.json().catch(() => ({ error: 'Download failed' }));
-					throw new Error(payload.error || 'Download failed');
-				}
+				const { data } = await api.initiateUpload({
+					file_name: file.name,
+					size: file.size,
+					mime_type: file.type || 'application/octet-stream',
+					virtual_path: targetPath,
+				}, { signal: queueItem.abortController.signal });
 
-				const contentLength = Number(response.headers.get('Content-Length')) || file.size || 0;
-				const reader = response.body?.getReader();
-				const chunks = [];
-				let received = 0;
-
-				if (reader) {
-					while (true) {
-						if (abortController.signal.aborted) throw new DOMException('Download cancelled', 'AbortError');
-						const { done, value } = await reader.read();
-						if (done) break;
-						chunks.push(value);
-						received += value.length;
-						const percent = contentLength ? Math.min(99, Math.round((received / contentLength) * 100)) : 50;
-						this.updateUpload(queueItem.id, { progress_percentage: percent });
-					}
-				} else {
-					chunks.push(await response.blob());
-				}
-
-				const blob = chunks[0] instanceof Blob ? chunks[0] : new Blob(chunks);
-				const url = URL.createObjectURL(blob);
-				const link = document.createElement('a');
-				link.href = url;
-				link.download = file.display_name || file.file_name || 'download';
-				document.body.appendChild(link);
-				link.click();
-				link.remove();
-				URL.revokeObjectURL(url);
-
+				const socket = api.createUploadSocket(data.upload_id);
 				this.updateUpload(queueItem.id, {
-					progress_percentage: 100,
-					status: 'completed',
+					status: 'uploading',
+					socket,
+					remoteUploadId: data.upload_id,
+				});
+
+				socket.onmessage = (event) => {
+					if (queueItem.abortController.signal.aborted) return;
+
+					const message = JSON.parse(event.data);
+					if (message.type === 'upload:progress') {
+						this.updateUpload(queueItem.id, {
+							progress_percentage: message.percent,
+							status: message.status,
+						});
+					}
+
+					if (message.type === 'upload:complete') {
+						this.updateUpload(queueItem.id, {
+							progress_percentage: 100,
+							status: 'completed',
+						});
+						socket.close();
+						onCompleted?.();
+					}
+
+					if (message.type === 'upload:error') {
+						this.updateUpload(queueItem.id, {
+							status: 'failed',
+							error: message.message,
+						});
+						socket.close();
+					}
+				};
+
+				socket.onerror = () => {
+					this.updateUpload(queueItem.id, {
+						status: 'failed',
+						error: 'WebSocket connection failed',
+					});
+				};
+
+				await api.uploadFile(data.upload_id, file, {
+					token: data.session_token,
+					signal: queueItem.abortController.signal,
 				});
 			} catch (error) {
-				if (isAbortError(error)) {
+				if (isAbortError(error) || queueItem.abortController.signal.aborted) {
 					this.updateUpload(queueItem.id, {
 						status: 'cancelled',
 						error: null,
@@ -242,86 +301,41 @@ export const useUploadQueueStore = defineStore('uploadQueue', {
 					status: 'failed',
 					error: error.message,
 				});
-				if (batchTotal === 1) throw error;
-			}
 			}
 		},
-		async uploadFiles(files, currentPath, onCompleted) {
-			const entries = Array.from(files || []);
-			const batchId = createBatchId();
-			const batchTotal = entries.length;
+		// Retry a previously failed upload. Resets its state and gives it a fresh
+		// AbortController (the old one may have been aborted) before re-running.
+		async retryUpload(id, onCompleted) {
+			const index = this.uploads.findIndex((item) => item.id === id);
+			if (index === -1) return;
+			const item = this.uploads[index];
+			if (item.type !== 'upload' || item.status !== 'failed' || !item.file) return;
 
-			for (const rawEntry of entries) {
-				const { file, relativePath } = normalizeUploadEntry(rawEntry);
-				const queueItem = this.registerUpload(file, currentPath, relativePath, { batchId, batchTotal });
-				const targetPath = buildVirtualPath(currentPath, relativePath);
+			const abortController = new AbortController();
+			this.updateUpload(id, {
+				status: 'pending',
+				progress_percentage: 0,
+				error: null,
+				socket: null,
+				abortController,
+			});
 
-				try {
-					const { data } = await api.initiateUpload({
-						file_name: file.name,
-						size: file.size,
-						mime_type: file.type || 'application/octet-stream',
-						virtual_path: targetPath,
-					}, { signal: queueItem.abortController.signal });
-
-					const socket = api.createUploadSocket(data.upload_id);
-					this.updateUpload(queueItem.id, {
-						status: 'uploading',
-						socket,
-						remoteUploadId: data.upload_id,
-					});
-
-					socket.onmessage = (event) => {
-						if (queueItem.abortController.signal.aborted) return;
-
-						const message = JSON.parse(event.data);
-						if (message.type === 'upload:progress') {
-							this.updateUpload(queueItem.id, {
-								progress_percentage: message.percent,
-								status: message.status,
-							});
-						}
-
-						if (message.type === 'upload:complete') {
-							this.updateUpload(queueItem.id, {
-								progress_percentage: 100,
-								status: 'completed',
-							});
-							socket.close();
-							onCompleted?.();
-						}
-
-						if (message.type === 'upload:error') {
-							this.updateUpload(queueItem.id, {
-								status: 'failed',
-								error: message.message,
-							});
-							socket.close();
-						}
-					};
-
-					socket.onerror = () => {
-						this.updateUpload(queueItem.id, {
-							status: 'failed',
-							error: 'WebSocket connection failed',
-						});
-					};
-
-					await api.uploadFile(data.upload_id, file, { signal: queueItem.abortController.signal });
-				} catch (error) {
-					if (isAbortError(error) || queueItem.abortController.signal.aborted) {
-						this.updateUpload(queueItem.id, {
-							status: 'cancelled',
-							error: null,
-						});
-						continue;
-					}
-
-					this.updateUpload(queueItem.id, {
-						status: 'failed',
-						error: error.message,
-					});
-				}
+			await this.runUpload(this.uploads[this.uploads.findIndex((entry) => entry.id === id)], onCompleted);
+		},
+		// Retry from the toast, which keys by either a single item id or a batchId.
+		// Retries the single matching failed upload, or every failed upload in the
+		// batch, re-running them sequentially.
+		async retryOperation(id, onCompleted) {
+			const single = this.uploads.find((item) => item.id === id);
+			if (single && single.type === 'upload') {
+				await this.retryUpload(id, onCompleted);
+				return;
+			}
+			const batchFailedIds = this.uploads
+				.filter((item) => item.batchId === id && item.type === 'upload' && item.status === 'failed')
+				.map((item) => item.id);
+			for (const failedId of batchFailedIds) {
+				await this.retryUpload(failedId, onCompleted);
 			}
 		},
 	},

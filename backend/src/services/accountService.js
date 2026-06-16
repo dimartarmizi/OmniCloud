@@ -20,10 +20,27 @@ export function getActiveAccounts(userId) {
 	return db.prepare("SELECT * FROM cloud_accounts WHERE user_id = ? AND status = 'active'").all(userId);
 }
 
+export function listUserIdsWithActiveAccounts() {
+	return db
+		.prepare("SELECT DISTINCT user_id FROM cloud_accounts WHERE status = 'active'")
+		.all()
+		.map((row) => row.user_id);
+}
+
 export function updateAccountUsage(userId, id, usedSpace) {
 	db.prepare(
 		'UPDATE cloud_accounts SET used_space = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND id = ?'
 	).run(usedSpace, userId, id);
+}
+
+export function adjustAccountUsage(userId, id, deltaBytes) {
+	const delta = Number(deltaBytes) || 0;
+	if (!delta) return;
+	db.prepare(
+		`UPDATE cloud_accounts
+     SET used_space = MAX(0, used_space + ?), updated_at = CURRENT_TIMESTAMP
+     WHERE user_id = ? AND id = ?`
+	).run(delta, userId, id);
 }
 
 export function updateAccountStorage(userId, id, totalSpace, usedSpace) {

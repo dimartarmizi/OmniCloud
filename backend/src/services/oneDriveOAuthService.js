@@ -1,9 +1,8 @@
-import { randomUUID } from 'crypto';
 import { env } from '../config/env.js';
-import { upsertCloudAccount } from './accountService.js';
-import { syncAccount } from './syncService.js';
+import { createOAuthStateStore } from '../utils/oauthStateStore.js';
+import { beginOAuthFlow, completeOAuthLink } from '../utils/oauthFlowHelper.js';
 
-const oauthStates = new Map();
+const oauthStates = createOAuthStateStore();
 
 function getAuthorityBase() {
 	return `https://login.microsoftonline.com/${encodeURIComponent(env.onedriveTenantId)}/oauth2/v2.0`;
@@ -86,8 +85,7 @@ export function getOneDriveIntegrationStatus() {
 export function createOneDriveAuthorizationRequest(userId) {
 	assertOneDriveConfigured();
 
-	const state = randomUUID();
-	oauthStates.set(state, { userId, createdAt: Date.now() });
+	const state = beginOAuthFlow(oauthStates, userId);
 
 	const authorizationUrl = new URL(`${getAuthorityBase()}/authorize`);
 	authorizationUrl.searchParams.set('client_id', env.onedriveClientId);
@@ -107,52 +105,38 @@ export function createOneDriveAuthorizationRequest(userId) {
 export async function completeOneDriveAccountLink({ code, state }) {
 	assertOneDriveConfigured();
 
-	if (!code || !state) {
-		throw new Error('Missing OneDrive OAuth code or state');
-	}
-
-	const authState = oauthStates.get(state);
-	if (!authState) {
-		throw new Error('Invalid or expired OneDrive OAuth state');
-	}
-
-	oauthStates.delete(state);
-
-	const tokens = await exchangeCodeForTokens(code);
-	const profile = await fetchGraphProfile(tokens.access_token);
-
-	if (!profile.email) {
-		throw new Error('Unable to read OneDrive account email');
-	}
-
-	const account = upsertCloudAccount({
-		userId: authState.userId,
-		id: randomUUID(),
-		email: profile.email,
+	return completeOAuthLink({
+		store: oauthStates,
 		provider: 'onedrive',
-		credentials: {
-			provider: 'onedrive',
-			clientId: env.onedriveClientId,
-			clientSecret: env.onedriveClientSecret,
-			redirectUri: env.onedriveRedirectUri,
-			tenantId: env.onedriveTenantId,
-			refreshToken: tokens.refresh_token || null,
-			accessToken: tokens.access_token || null,
-			expiresIn: tokens.expires_in || null,
-			scope: tokens.scope || null,
-			tokenType: tokens.token_type || null,
-			driveId: profile.driveId,
-			driveType: profile.driveType,
+		providerLabel: 'OneDrive',
+		code,
+		state,
+		exchange: async (authorizationCode) => {
+			const tokens = await exchangeCodeForTokens(authorizationCode);
+			const profile = await fetchGraphProfile(tokens.access_token);
+
+			return {
+				account: {
+					email: profile.email,
+					credentials: {
+						provider: 'onedrive',
+						clientId: env.onedriveClientId,
+						clientSecret: env.onedriveClientSecret,
+						redirectUri: env.onedriveRedirectUri,
+						tenantId: env.onedriveTenantId,
+						refreshToken: tokens.refresh_token || null,
+						accessToken: tokens.access_token || null,
+						expiresIn: tokens.expires_in || null,
+						scope: tokens.scope || null,
+						tokenType: tokens.token_type || null,
+						driveId: profile.driveId,
+						driveType: profile.driveType,
+					},
+					total_space: profile.totalSpace,
+					used_space: profile.usedSpace,
+				},
+				profile,
+			};
 		},
-		total_space: profile.totalSpace,
-		used_space: profile.usedSpace,
-		status: 'active',
 	});
-
-	await syncAccount(authState.userId, account);
-
-	return {
-		account,
-		profile,
-	};
 }

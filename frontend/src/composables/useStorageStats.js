@@ -1,7 +1,7 @@
 import { computed } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useI18n } from 'vue-i18n';
-import { formatBytesStrict } from './useFormatFile.js';
+import { formatBytes } from './useFormatFile.js';
 import { useAccountManagementStore } from '../stores/accountManagement';
 
 export function useStorageStats() {
@@ -26,9 +26,9 @@ export function useStorageStats() {
 
 	const storagePercentRounded = computed(() => Math.round(storagePercent.value));
 
-	const usedFormatted = computed(() => formatBytesStrict(totalUsed.value));
-	const totalFormatted = computed(() => formatBytesStrict(totalSpace.value));
-	const freeFormatted = computed(() => formatBytesStrict(totalFree.value));
+	const usedFormatted = computed(() => formatBytes(totalUsed.value, { strict: true }));
+	const totalFormatted = computed(() => formatBytes(totalSpace.value, { strict: true }));
+	const freeFormatted = computed(() => formatBytes(totalFree.value, { strict: true }));
 
 	const storageLabel = computed(() =>
 		t('sidebar.storageUsed', { used: usedFormatted.value, total: totalFormatted.value }),

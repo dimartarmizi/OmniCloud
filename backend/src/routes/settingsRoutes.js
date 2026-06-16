@@ -1,27 +1,29 @@
 import { Router } from 'express';
 import { requireAppUser } from '../middleware/authMiddleware.js';
 import { getSettings, updateSettings } from '../services/settingsService.js';
+import { AppError } from '../utils/AppError.js';
 
 const router = Router();
 
 router.use(requireAppUser);
 
-router.get('/settings', (req, res) => {
+router.get('/settings', (req, res, next) => {
 	try {
 		const settings = getSettings(req.user.id);
 		res.json({ data: settings });
 	} catch (error) {
-		res.status(500).json({ error: error.message });
+		next(error);
 	}
 });
 
-router.patch('/settings', (req, res) => {
+router.patch('/settings', (req, res, next) => {
 	try {
 		const settings = req.body;
+		// Invalid setting keys are a client error; surface as a typed 400.
 		const updated = updateSettings(req.user.id, settings);
 		res.json({ data: updated });
 	} catch (error) {
-		res.status(400).json({ error: error.message });
+		next(error instanceof AppError ? error : new AppError(error.message, 400, 'INVALID_SETTINGS'));
 	}
 });
 

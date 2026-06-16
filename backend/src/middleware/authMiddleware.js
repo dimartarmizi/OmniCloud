@@ -15,18 +15,20 @@ function parseCookies(cookieHeader = '') {
 	);
 }
 
+export function resolveUserFromRequest(req) {
+	if (env.appMode === 'local') {
+		return getFallbackLocalUser();
+	}
+
+	const cookies = parseCookies(req.headers?.cookie || '');
+	const token = cookies[env.authCookieName] || '';
+	return resolveSession(token);
+}
+
 export function attachAuthContext(req, res, next) {
 	res.locals.authCookieOptions = getCookieOptions();
 	req.appMode = env.appMode;
-
-	if (env.appMode === 'local') {
-		req.user = getFallbackLocalUser();
-		return next();
-	}
-
-	const cookies = parseCookies(req.headers.cookie || '');
-	const token = cookies[env.authCookieName] || '';
-	req.user = resolveSession(token);
+	req.user = resolveUserFromRequest(req);
 	return next();
 }
 

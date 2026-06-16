@@ -1,13 +1,18 @@
 import { createRouter, createWebHistory } from 'vue-router';
-import HomeView from '../views/HomeView.vue';
-import MyDriveView from '../views/MyDriveView.vue';
-import RecentView from '../views/RecentView.vue';
-import SharedWithMeView from '../views/SharedWithMeView.vue';
-import StarredView from '../views/StarredView.vue';
-import QuotaView from '../views/QuotaView.vue';
-import LoginView from '../views/auth/LoginView.vue';
-import RegisterView from '../views/auth/RegisterView.vue';
 import { useAuthStore } from '../stores/auth';
+
+// Lazy-load every view via dynamic import so the entry bundle no longer pulls in
+// the heavy drive/quota pages when a user only needs the (public) login screen.
+// Each view becomes its own code-split chunk, fetched on first navigation.
+const HomeView = () => import('../views/HomeView.vue');
+const MyDriveView = () => import('../views/MyDriveView.vue');
+const RecentView = () => import('../views/RecentView.vue');
+const SharedWithMeView = () => import('../views/SharedWithMeView.vue');
+const StarredView = () => import('../views/StarredView.vue');
+const QuotaView = () => import('../views/QuotaView.vue');
+const SettingsView = () => import('../views/SettingsView.vue');
+const LoginView = () => import('../views/auth/LoginView.vue');
+const RegisterView = () => import('../views/auth/RegisterView.vue');
 
 const router = createRouter({
 	history: createWebHistory(),
@@ -53,6 +58,11 @@ const router = createRouter({
 			path: '/quota',
 			name: 'quota',
 			component: QuotaView,
+		},
+		{
+			path: '/settings',
+			name: 'settings',
+			component: SettingsView,
 		},
 	],
 });

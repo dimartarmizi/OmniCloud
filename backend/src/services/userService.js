@@ -26,6 +26,24 @@ export function createUser({ email, passwordHash, isLocal = false, id = randomUU
 	return getUserById(id);
 }
 
+export function updateUserPassword(userId, passwordHash) {
+	db.prepare(
+		'UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+	).run(passwordHash, userId);
+	return getUserById(userId);
+}
+
+/**
+ * Hard-delete a user. The cloud_accounts, file_metadata, auth_sessions and
+ * user_settings tables all declare ON DELETE CASCADE against users(id), so a
+ * single delete here removes every owned row. Returns true when a row was
+ * removed.
+ */
+export function deleteUser(userId) {
+	const result = db.prepare('DELETE FROM users WHERE id = ?').run(userId);
+	return result.changes > 0;
+}
+
 export function getOrCreateLocalUser() {
 	const existing = getUserById(LOCAL_USER_ID);
 	if (existing) return existing;

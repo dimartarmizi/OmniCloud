@@ -21,6 +21,10 @@ function toNumber(value) {
 	return Number.isFinite(parsed) ? parsed : 0;
 }
 
+// Hoisted so formatBytes does not rebuild this array on every call (invoked once
+// per rendered row, per re-render).
+const BYTE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB'];
+
 export function getProviderMeta(provider) {
 	return PROVIDER_META[provider] || { key: provider || 'unknown', label: provider || 'Provider', icon: null };
 }
@@ -37,36 +41,49 @@ export function providerIcon(provider) {
 	return getProviderMeta(provider).icon;
 }
 
-export function formatBytes(value) {
-	if (!value) return '—';
-	const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+/**
+ * Format a byte count for display.
+ *
+ * @param {number} value
+ * @param {object} [options]
+ * @param {boolean} [options.strict=false] When false (default), a falsy value
+ *   (0, null, undefined) renders as an em-dash placeholder ("—"). When true,
+ *   the value is always formatted numerically (e.g. 0 → "0 B"), which is what
+ *   storage/quota readouts want.
+ */
+export function formatBytes(value, { strict = false } = {}) {
+	if (!strict && !value) return '—';
 	let amount = toNumber(value);
 	let index = 0;
-	while (amount >= 1024 && index < units.length - 1) {
+	while (amount >= 1024 && index < BYTE_UNITS.length - 1) {
 		amount /= 1024;
 		index += 1;
 	}
-	return `${amount.toFixed(amount >= 10 || index === 0 ? 0 : 1)} ${units[index]}`;
+	return `${amount.toFixed(amount >= 10 || index === 0 ? 0 : 1)} ${BYTE_UNITS[index]}`;
 }
 
-export function formatBytesStrict(value) {
-	const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-	let amount = toNumber(value);
-	let index = 0;
-	while (amount >= 1024 && index < units.length - 1) {
-		amount /= 1024;
-		index += 1;
+// Intl.DateTimeFormat construction resolves locale data and is comparatively
+// expensive; formatDate is called once per rendered row and the file lists
+// re-render on every scroll/filter/sort/search. Cache one formatter per locale
+// and reuse it, instead of building a fresh formatter on each call.
+const dateFormatterCache = new Map();
+
+function getDateFormatter(locale) {
+	let formatter = dateFormatterCache.get(locale);
+	if (!formatter) {
+		formatter = new Intl.DateTimeFormat(locale, {
+			day: 'numeric',
+			month: 'short',
+			year: 'numeric',
+		});
+		dateFormatterCache.set(locale, formatter);
 	}
-	return `${amount.toFixed(amount >= 10 || index === 0 ? 0 : 1)} ${units[index]}`;
+	return formatter;
 }
 
 export function formatDate(value, locale = 'id-ID') {
 	if (!value) return '—';
-	return new Intl.DateTimeFormat(locale, {
-		day: 'numeric',
-		month: 'short',
-		year: 'numeric',
-	}).format(new Date(value));
+	return getDateFormatter(locale).format(new Date(value));
 }
 
 export function getCreatedTime(file) {

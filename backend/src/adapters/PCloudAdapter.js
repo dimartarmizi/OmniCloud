@@ -1,4 +1,5 @@
 import { Readable } from 'stream';
+import crypto from 'crypto';
 import { BaseCloudAdapter } from './BaseCloudAdapter.js';
 import { decryptJson } from '../utils/crypto.js';
 import { pcloudGet, pcloudLogin } from '../utils/pcloudClient.js';
@@ -85,7 +86,13 @@ export class PCloudAdapter extends BaseCloudAdapter {
 
 	async fetchStructure() {
 		const records = [];
-		const rootPayload = await this.call('listfolder', { path: '/' });
+		// pCloud's listfolder supports `recursive: 1`, returning the ENTIRE
+		// directory tree (every folder carries a nested `contents` array) in a
+		// single request. The previous implementation issued one listfolder call
+		// per folder (populateFolderContents recursed the tree), an N+1 network
+		// pattern whose sync latency grew linearly with folder count. One recursive
+		// call replaces all of them; `walk` already handles the nested contents.
+		const rootPayload = await this.call('listfolder', { path: '/', recursive: 1 });
 
 		const walk = (entry, parentVirtualPath) => {
 			const isFolder = Boolean(entry.isfolder);
@@ -115,23 +122,7 @@ export class PCloudAdapter extends BaseCloudAdapter {
 			}
 		};
 
-		const populateFolderContents = async (entry) => {
-			if (!entry?.isfolder) return entry;
-
-			const folderPath = entry.folderid === 0 ? '/' : entry.path;
-			const payload = entry.folderid === 0
-				? rootPayload
-				: await this.call('listfolder', { path: folderPath || '/' });
-
-			const contents = Array.isArray(payload.metadata?.contents) ? payload.metadata.contents : [];
-			entry.contents = contents;
-
-			await Promise.all(contents.filter((child) => child?.isfolder).map((child) => populateFolderContents(child)));
-			return entry;
-		};
-
-		const rootEntry = await populateFolderContents(rootPayload.metadata);
-		walk(rootEntry, '/');
+		walk(rootPayload.metadata, '/');
 		return records;
 	}
 
@@ -159,37 +150,56 @@ export class PCloudAdapter extends BaseCloudAdapter {
 		const normalized = normalizeVirtualPath(virtualPath);
 		const folderPath = normalized === '/' ? '/' : normalized.replace(/\/+$/, '');
 
-		const chunks = [];
-		let received = 0;
-		for await (const chunk of stream) {
-			const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-			chunks.push(buffer);
-			received += buffer.length;
-			if (typeof onProgress === 'function') {
-				onProgress(received);
-			}
-		}
-		const fileBuffer = Buffer.concat(chunks, received);
-		if (size && received !== size) {
-			console.warn(`pCloud upload size mismatch: expected ${size}, received ${received}`);
-		}
+		// Stream the request body instead of buffering the whole file into memory.
+		// We hand-build a multipart/form-data payload as an async generator: the
+		// field preamble, then the source stream chunks (driving onProgress), then
+		// the closing boundary. undici's fetch consumes async iterables as a
+		// streamed body when `duplex: 'half'` is set, so RAM stays flat regardless
+		// of file size.
+		const boundary = `----OmniCloudBoundary${crypto.randomBytes(16).toString('hex')}`;
+		// Field/filename values are sanitized to avoid breaking the multipart
+		// headers (CR/LF and quotes are not allowed in a quoted-string parameter).
+		const safeFileName = String(fileName).replace(/[\r\n"]/g, '_');
+		const contentType = mimeType || 'application/octet-stream';
 
-		const form = new FormData();
-		form.set('auth', auth);
-		form.set('path', folderPath);
-		form.set('filename', fileName);
-		form.set('nopartial', '1');
-		form.append('file', new Blob([fileBuffer], { type: mimeType || 'application/octet-stream' }), fileName);
+		const preamble =
+			`--${boundary}\r\nContent-Disposition: form-data; name="auth"\r\n\r\n${auth}\r\n` +
+			`--${boundary}\r\nContent-Disposition: form-data; name="path"\r\n\r\n${folderPath}\r\n` +
+			`--${boundary}\r\nContent-Disposition: form-data; name="filename"\r\n\r\n${safeFileName}\r\n` +
+			`--${boundary}\r\nContent-Disposition: form-data; name="nopartial"\r\n\r\n1\r\n` +
+			`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${safeFileName}"\r\n` +
+			`Content-Type: ${contentType}\r\n\r\n`;
+		const epilogue = `\r\n--${boundary}--\r\n`;
+
+		let received = 0;
+		async function* multipartBody() {
+			yield Buffer.from(preamble, 'utf8');
+			for await (const chunk of stream) {
+				const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+				received += buffer.length;
+				if (typeof onProgress === 'function') {
+					onProgress(received);
+				}
+				yield buffer;
+			}
+			yield Buffer.from(epilogue, 'utf8');
+		}
 
 		const response = await fetch(`https://${host}/uploadfile`, {
 			method: 'POST',
-			body: form,
+			headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` },
+			body: multipartBody(),
+			duplex: 'half',
 		});
 
 		const payload = await response.json().catch(() => null);
 		if (!payload || payload.result !== 0) {
 			const message = payload?.error || `pCloud upload failed (HTTP ${response.status})`;
 			throw new Error(message);
+		}
+
+		if (size && received !== size) {
+			console.warn(`pCloud upload size mismatch: expected ${size}, received ${received}`);
 		}
 
 		const meta = (payload.metadata || [])[0] || {};
@@ -224,7 +234,7 @@ export class PCloudAdapter extends BaseCloudAdapter {
 		return { path: `${base}/${fileRecord.file_name}` };
 	}
 
-	async getDownloadStream(fileRecord) {
+	async getDownloadStream(fileRecord, { range } = {}) {
 		const params = this.idParams(fileRecord);
 		const link = await this.call('getfilelink', params);
 		const host = (link.hosts || [])[0];
@@ -232,8 +242,10 @@ export class PCloudAdapter extends BaseCloudAdapter {
 			throw new Error('pCloud did not return a download link');
 		}
 
-		const response = await fetch(`https://${host}${link.path}`);
-		if (!response.ok || !response.body) {
+		const response = await fetch(`https://${host}${link.path}`, {
+			...(range ? { headers: { Range: `bytes=${range.start}-${range.end}` } } : {}),
+		});
+		if ((!response.ok && response.status !== 206) || !response.body) {
 			throw new Error('Failed to download file from pCloud');
 		}
 
@@ -244,6 +256,19 @@ export class PCloudAdapter extends BaseCloudAdapter {
 		const params = this.idParams(fileRecord);
 		const method = fileRecord.is_folder ? 'renamefolder' : 'renamefile';
 		await this.call(method, { ...params, toname: nextName });
+	}
+
+	async moveFile(fileRecord, targetVirtualPath) {
+		await this.ensureFolder(targetVirtualPath);
+		const params = this.idParams(fileRecord);
+		const method = fileRecord.is_folder ? 'renamefolder' : 'renamefile';
+		const normalized = normalizeVirtualPath(targetVirtualPath);
+		const base = normalized === '/' ? '' : normalized.replace(/\/+$/, '');
+		// pCloud rename* doubles as move when given a destination topath that
+		// keeps the same file name.
+		const topath = `${base}/${fileRecord.file_name}`;
+		await this.call(method, { ...params, topath });
+		return { remoteParentId: normalized };
 	}
 
 	async deleteFile(fileRecord) {

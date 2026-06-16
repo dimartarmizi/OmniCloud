@@ -122,7 +122,7 @@ export class DropboxAdapter extends BaseCloudAdapter {
 		}
 	}
 
-	async content(path, { args, body, contentType = 'application/octet-stream' } = {}) {
+	async content(path, { args, body, contentType = 'application/octet-stream', headers = {} } = {}) {
 		return this.requestWithReauth(async (accessToken) => {
 			const response = await fetch(`https://content.dropboxapi.com/2${path}`, {
 				method: 'POST',
@@ -130,6 +130,7 @@ export class DropboxAdapter extends BaseCloudAdapter {
 					Authorization: `Bearer ${accessToken}`,
 					'Dropbox-API-Arg': JSON.stringify(args),
 					...(contentType ? { 'Content-Type': contentType } : {}),
+					...headers,
 				},
 				body,
 				...(body ? { duplex: 'half' } : {}),
@@ -281,16 +282,19 @@ export class DropboxAdapter extends BaseCloudAdapter {
 		});
 	}
 
-	async getDownloadStream(fileRecord) {
+	async getDownloadStream(fileRecord, { range } = {}) {
 		const response = await this.content('/files/download', {
 			args: {
 				path: fileRecord.remote_file_id || joinDropboxPath(fileRecord.virtual_path, fileRecord.file_name),
 			},
 			body: null,
 			contentType: '',
+			// Dropbox's content download endpoint honors a standard Range header
+			// and replies 206 with the requested slice for seek/resume support.
+			...(range ? { headers: { Range: `bytes=${range.start}-${range.end}` } } : {}),
 		});
 
-		if (!response.ok) {
+		if (!response.ok && response.status !== 206) {
 			const payload = await response.json().catch(() => null);
 			throw new Error(parseDropboxError(payload, 'Failed to download file from Dropbox'));
 		}
@@ -313,6 +317,22 @@ export class DropboxAdapter extends BaseCloudAdapter {
 		});
 	}
 
+	async moveFile(fileRecord, targetVirtualPath) {
+		const fromPath = joinDropboxPath(fileRecord.virtual_path, fileRecord.file_name);
+		const parentPath = await this.ensureRemotePath(targetVirtualPath);
+		const toPath = joinDropboxPath(parentPath || '/', fileRecord.file_name);
+		const payload = await this.rpc('/files/move_v2', {
+			from_path: fileRecord.remote_file_id || fromPath,
+			to_path: toPath,
+			autorename: false,
+			allow_shared_folder: true,
+		});
+		return {
+			remoteFileId: payload.metadata?.id || payload.metadata?.path_lower || toPath,
+			remoteParentId: parentPath || '/',
+		};
+	}
+
 	async deleteFile(fileRecord) {
 		await this.rpc('/files/delete_v2', {
 			path: fileRecord.remote_file_id || joinDropboxPath(fileRecord.virtual_path, fileRecord.file_name),
@@ -332,5 +352,19 @@ export class DropboxAdapter extends BaseCloudAdapter {
 			remote_parent_id: toVirtualPath(remote.path_display || remote.path_lower),
 			provider: 'dropbox',
 		};
+	}
+
+	async revokeAccess() {
+		try {
+			const accessToken = await this.createAccessToken();
+			await fetch('https://api.dropboxapi.com/2/auth/token/revoke', {
+				method: 'POST',
+				headers: { Authorization: `Bearer ${accessToken}` },
+			});
+			return true;
+		} catch (error) {
+			console.warn(`[dropbox] token revoke failed for ${this.account.email}:`, error?.message || error);
+			return false;
+		}
 	}
 }

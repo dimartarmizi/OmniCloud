@@ -2,15 +2,6 @@ import { db } from '../config/database.js';
 
 const VALID_KEYS = ['language', 'theme'];
 
-export function getSetting(userId, key) {
-	if (!VALID_KEYS.includes(key)) {
-		throw new Error(`Invalid setting key: ${key}`);
-	}
-
-	const row = db.prepare('SELECT value FROM user_settings WHERE user_id = ? AND key = ?').get(userId, key);
-	return row ? row.value : null;
-}
-
 export function getSettings(userId) {
 	const rows = db.prepare('SELECT key, value FROM user_settings WHERE user_id = ?').all(userId);
 	const settings = {};

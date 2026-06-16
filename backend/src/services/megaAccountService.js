@@ -2,12 +2,16 @@ import { randomUUID } from 'crypto';
 import { Storage } from 'megajs';
 import { markAccountStatus, upsertCloudAccount } from './accountService.js';
 import { syncAccount } from './syncService.js';
+import { isTransientProviderError } from '../utils/providerErrors.js';
 
 const MEGA_CONNECT_ATTEMPTS = 3;
 const MEGA_RETRY_DELAYS = [3000, 8000];
 
+// MEGA temporary failures (EAGAIN, congestion, server malfunction) are just a
+// subset of the centralized transient-error classification, so delegate to it
+// instead of maintaining a separate regex here.
 function isMegaTemporaryError(error) {
-	return /EAGAIN|temporary congestion|server malfunction/i.test(error?.message || '');
+	return isTransientProviderError(error);
 }
 
 function isMegaInvalidCredentialError(error) {

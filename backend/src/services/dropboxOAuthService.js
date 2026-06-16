@@ -1,9 +1,8 @@
-import { randomUUID } from 'crypto';
 import { env } from '../config/env.js';
-import { upsertCloudAccount } from './accountService.js';
-import { syncAccount } from './syncService.js';
+import { createOAuthStateStore } from '../utils/oauthStateStore.js';
+import { beginOAuthFlow, completeOAuthLink } from '../utils/oauthFlowHelper.js';
 
-const oauthStates = new Map();
+const oauthStates = createOAuthStateStore();
 const DROPBOX_SCOPES = [
 	'account_info.read',
 	'files.metadata.read',
@@ -88,8 +87,7 @@ export function getDropboxIntegrationStatus() {
 export function createDropboxAuthorizationRequest(userId) {
 	assertDropboxConfigured();
 
-	const state = randomUUID();
-	oauthStates.set(state, { userId, createdAt: Date.now() });
+	const state = beginOAuthFlow(oauthStates, userId);
 
 	const authorizationUrl = new URL('https://www.dropbox.com/oauth2/authorize');
 	authorizationUrl.searchParams.set('client_id', env.dropboxClientId);
@@ -109,55 +107,41 @@ export function createDropboxAuthorizationRequest(userId) {
 export async function completeDropboxAccountLink({ code, state }) {
 	assertDropboxConfigured();
 
-	if (!code || !state) {
-		throw new Error('Missing Dropbox OAuth code or state');
-	}
-
-	const authState = oauthStates.get(state);
-	if (!authState) {
-		throw new Error('Invalid or expired Dropbox OAuth state');
-	}
-
-	oauthStates.delete(state);
-
-	const tokens = await exchangeCodeForTokens(code);
-	const profile = await fetchDropboxProfile(tokens.access_token);
-
-	if (!profile.email) {
-		throw new Error('Unable to read Dropbox account email');
-	}
-
-	if (!tokens.refresh_token) {
-		throw new Error('Dropbox did not return a refresh token. Reconnect with offline access enabled.');
-	}
-
-	const account = upsertCloudAccount({
-		userId: authState.userId,
-		id: randomUUID(),
-		email: profile.email,
+	return completeOAuthLink({
+		store: oauthStates,
 		provider: 'dropbox',
-		credentials: {
-			provider: 'dropbox',
-			clientId: env.dropboxClientId,
-			clientSecret: env.dropboxClientSecret,
-			redirectUri: env.dropboxRedirectUri,
-			refreshToken: tokens.refresh_token,
-			accessToken: tokens.access_token || null,
-			expiresIn: tokens.expires_in || null,
-			scope: tokens.scope || DROPBOX_SCOPES.join(' '),
-			tokenType: tokens.token_type || 'bearer',
-			accountId: profile.accountId,
-			displayName: profile.displayName,
+		providerLabel: 'Dropbox',
+		code,
+		state,
+		exchange: async (authorizationCode) => {
+			const tokens = await exchangeCodeForTokens(authorizationCode);
+			const profile = await fetchDropboxProfile(tokens.access_token);
+
+			if (!tokens.refresh_token) {
+				throw new Error('Dropbox did not return a refresh token. Reconnect with offline access enabled.');
+			}
+
+			return {
+				account: {
+					email: profile.email,
+					credentials: {
+						provider: 'dropbox',
+						clientId: env.dropboxClientId,
+						clientSecret: env.dropboxClientSecret,
+						redirectUri: env.dropboxRedirectUri,
+						refreshToken: tokens.refresh_token,
+						accessToken: tokens.access_token || null,
+						expiresIn: tokens.expires_in || null,
+						scope: tokens.scope || DROPBOX_SCOPES.join(' '),
+						tokenType: tokens.token_type || 'bearer',
+						accountId: profile.accountId,
+						displayName: profile.displayName,
+					},
+					total_space: profile.totalSpace,
+					used_space: profile.usedSpace,
+				},
+				profile,
+			};
 		},
-		total_space: profile.totalSpace,
-		used_space: profile.usedSpace,
-		status: 'active',
 	});
-
-	await syncAccount(authState.userId, account);
-
-	return {
-		account,
-		profile,
-	};
 }

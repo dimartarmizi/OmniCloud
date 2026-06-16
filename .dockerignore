@@ -38,6 +38,13 @@ backend/omnicloud.db-*
 *.sqlite
 *.sqlite3
 
+# Transient / developer-workspace directories and working docs
+dev
+temp
+tmp
+scratch
+suggestion_audit.md
+
 # OS
 .DS_Store
 Thumbs.db

@@ -5,7 +5,10 @@ backend/node_modules/
 
 # Build output
 frontend/dist/
+dist/
+build/
 coverage/
+*.local
 
 # Environment files
 .env
@@ -35,3 +38,12 @@ pnpm-debug.log*
 Thumbs.db
 .vscode/
 .idea/
+
+# Transient / developer-workspace directories (never commit)
+dev/
+temp/
+tmp/
+scratch/
+
+# Internal working documents (not part of the shipped project)
+suggestion_audit.md

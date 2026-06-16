@@ -61,10 +61,15 @@
 		"yes": "Ya",
 		"no": "Tidak",
 		"confirm": "Konfirmasi",
+		"create": "Buat",
 		"success": "Berhasil",
 		"error": "Kesalahan",
 		"retry": "Coba lagi",
-		"name": "Nama"
+		"name": "Nama",
+		"copyId": "Salin ID",
+		"copied": "Tersalin",
+		"move": "Pindahkan",
+		"moveHere": "Pindahkan ke sini"
 	},
 	"nav": {
 		"home": "Beranda",
@@ -91,7 +96,8 @@
 		"uploadFile": "Upload File",
 		"uploadFolder": "Upload Folder",
 		"storage": "Penyimpanan",
-		"storageUsed": "{used} dari {total} telah digunakan"
+		"storageUsed": "{used} dari {total} telah digunakan",
+		"connectAccountFirst": "Hubungkan akun penyimpanan terlebih dahulu"
 	},
 	"home": {
 		"subtitle": "Cloud accounts",
@@ -126,6 +132,14 @@
 	},
 	"drive": {
 		"title": "Drive Saya",
+		"rootName": "Drive Saya",
+		"dropToUpload": "Lepas file di sini untuk upload",
+		"dropToUploadDesc": "File dan folder akan diunggah ke lokasi Drive saat ini.",
+		"emptyTitle": "Folder ini kosong",
+		"emptyHint": "Unggah file atau seret dan lepas ke sini untuk memulai.",
+		"noAccountTitle": "Belum ada akun penyimpanan terhubung",
+		"noAccountHint": "Hubungkan akun penyimpanan cloud sebelum mengunggah. File Anda membutuhkan provider sebagai tempat penyimpanan.",
+		"connectAccountCta": "Hubungkan akun",
 		"starredTitle": "Berbintang",
 		"starredSubtitle": "File yang ditandai berbintang dari semua provider yang mendukungnya.",
 		"uploadPipeline": "Upload pipeline",
@@ -142,6 +156,11 @@
 		"rename": "Ganti nama",
 		"deleteConfirm": "Hapus {name}?",
 		"deleteConfirmDesc": "Item akan dipindahkan ke sampah.",
+		"moveTitle": "Pindahkan ke...",
+		"moveDescription": "Pilih folder tujuan untuk \"{name}\".",
+		"moveUp": "Kembali",
+		"moveNoSubfolders": "Tidak ada subfolder di sini.",
+		"moveSuccess": "Berhasil dipindahkan.",
 		"details": "Detail",
 		"preview": "Pratinjau",
 		"star": "Beri bintang",
@@ -419,5 +438,26 @@
 		"notAvailable": "Preview belum tersedia untuk tipe file ini.",
 		"document": "Preview dokumen",
 		"failed": "Preview gagal dimuat. Beberapa file provider memang tidak kompatibel untuk preview ringan."
+	},
+	"settings": {
+		"title": "Pengaturan",
+		"account": "Akun",
+		"signedInAs": "Masuk sebagai",
+		"localModeNotice": "Manajemen akun hanya tersedia di mode hosted. Instance ini berjalan di mode lokal tanpa proses masuk.",
+		"changePassword": "Ubah kata sandi",
+		"currentPassword": "Kata sandi saat ini",
+		"newPassword": "Kata sandi baru",
+		"confirmPassword": "Konfirmasi kata sandi baru",
+		"passwordHint": "Gunakan minimal 8 karakter.",
+		"passwordMismatch": "Kata sandi tidak cocok.",
+		"updatePassword": "Perbarui kata sandi",
+		"passwordChanged": "Kata sandi berhasil diperbarui.",
+		"passwordChangeFailed": "Tidak dapat mengubah kata sandi.",
+		"deleteAccount": "Hapus akun",
+		"deleteAccountWarning": "Tindakan ini menghapus akun Anda secara permanen, memutuskan semua penyedia cloud yang terhubung, dan menghapus indeks file Anda. Tidak dapat dibatalkan.",
+		"confirmWithPassword": "Masukkan kata sandi Anda untuk konfirmasi",
+		"deletePasswordRequired": "Silakan masukkan kata sandi Anda untuk melanjutkan.",
+		"deleteAccountConfirm": "Apakah Anda yakin ingin menghapus akun secara permanen?",
+		"deleteAccountFailed": "Tidak dapat menghapus akun."
 	}
 }

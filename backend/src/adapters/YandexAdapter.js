@@ -251,7 +251,7 @@ export class YandexAdapter extends BaseCloudAdapter {
 		);
 	}
 
-	async getDownloadStream(fileRecord) {
+	async getDownloadStream(fileRecord, { range } = {}) {
 		const info = await this.request('/resources/download', {
 			query: { path: this.resolvePath(fileRecord) },
 		});
@@ -259,8 +259,10 @@ export class YandexAdapter extends BaseCloudAdapter {
 			throw new Error('Yandex did not return a download URL');
 		}
 
-		const response = await fetch(info.href);
-		if (!response.ok || !response.body) {
+		const response = await fetch(info.href, {
+			...(range ? { headers: { Range: `bytes=${range.start}-${range.end}` } } : {}),
+		});
+		if ((!response.ok && response.status !== 206) || !response.body) {
 			throw new Error('Failed to download file from Yandex Disk');
 		}
 		return Readable.fromWeb(response.body);
@@ -282,6 +284,19 @@ export class YandexAdapter extends BaseCloudAdapter {
 			method: 'DELETE',
 			query: { path: this.resolvePath(fileRecord), permanently: 'false' },
 		});
+	}
+
+	async moveFile(fileRecord, targetVirtualPath) {
+		await this.ensureFolder(targetVirtualPath);
+		const from = this.resolvePath(fileRecord);
+		const normalized = normalizeVirtualPath(targetVirtualPath);
+		const base = normalized === '/' ? '' : normalized.replace(/\/+$/, '');
+		const to = `${base}/${fileRecord.file_name}`;
+		await this.request('/resources/move', {
+			method: 'POST',
+			query: { from, path: to, overwrite: 'false' },
+		});
+		return { remoteFileId: to, remoteParentId: normalized };
 	}
 
 	async getFileDetails(fileRecord) {

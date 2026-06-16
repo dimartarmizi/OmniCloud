@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { requireAppUser } from '../middleware/authMiddleware.js';
+import { AppError } from '../utils/AppError.js';
 import {
 	ALLOCATION_STRATEGIES,
 	getAllocationConfig,
@@ -24,7 +25,7 @@ function serializeAccount(account) {
 	};
 }
 
-router.get('/allocation', (req, res) => {
+router.get('/allocation', (req, res, next) => {
 	try {
 		const config = getAllocationConfig(req.user.id);
 		res.json({
@@ -35,13 +36,14 @@ router.get('/allocation', (req, res) => {
 			},
 		});
 	} catch (error) {
-		res.status(500).json({ error: error.message });
+		next(error);
 	}
 });
 
-router.patch('/allocation', (req, res) => {
+router.patch('/allocation', (req, res, next) => {
 	try {
 		const { strategy, order } = req.body || {};
+		// Validation errors from setAllocationConfig are client errors (400).
 		const updated = setAllocationConfig(req.user.id, { strategy, order });
 		res.json({
 			data: {
@@ -51,7 +53,7 @@ router.patch('/allocation', (req, res) => {
 			},
 		});
 	} catch (error) {
-		res.status(400).json({ error: error.message });
+		next(error instanceof AppError ? error : new AppError(error.message, 400, 'INVALID_ALLOCATION'));
 	}
 });
 

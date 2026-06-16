@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import { db } from '../config/database.js';
 import { env } from '../config/env.js';
-import { createUser, getUserByEmail, getUserById, getOrCreateLocalUser, serializeUser } from './userService.js';
+import { createUser, getUserByEmail, getUserById, getOrCreateLocalUser, serializeUser, updateUserPassword, deleteUser } from './userService.js';
 
 const SESSION_BYTES = 32;
 const PASSWORD_MIN_LENGTH = 8;
@@ -81,6 +81,19 @@ export function clearUserSessions(userId) {
 	db.prepare('DELETE FROM auth_sessions WHERE user_id = ?').run(userId);
 }
 
+/**
+ * Delete all auth sessions whose expiry has passed. resolveSession already
+ * deletes a session lazily when its exact token is presented, but abandoned
+ * sessions (the user never returns) would otherwise accumulate forever. A daily
+ * cron calls this to keep the table bounded. Returns the number of rows removed.
+ */
+export function purgeExpiredSessions() {
+	const result = db
+		.prepare('DELETE FROM auth_sessions WHERE expires_at <= ?')
+		.run(new Date().toISOString());
+	return result.changes;
+}
+
 export function registerHostedUser({ email, password }) {
 	if (env.appMode !== 'hosted') {
 		throw new Error('Registration is only available in hosted mode');
@@ -124,11 +137,63 @@ export function getFallbackLocalUser() {
 	return getOrCreateLocalUser();
 }
 
+/**
+ * Change a hosted user's password after verifying the current one. Hosted mode
+ * only — local mode has no credentials. All existing sessions are invalidated
+ * so other devices must re-authenticate with the new password.
+ */
+export function changeHostedUserPassword(userId, { currentPassword, newPassword }) {
+	if (env.appMode !== 'hosted') {
+		throw new Error('Password change is only available in hosted mode');
+	}
+
+	const user = getUserById(userId);
+	if (!user) {
+		throw new Error('User not found');
+	}
+
+	if (!verifyPassword(currentPassword, user.password_hash)) {
+		throw new Error('Current password is incorrect');
+	}
+
+	if (String(newPassword || '').length < PASSWORD_MIN_LENGTH) {
+		throw new Error(`Password must be at least ${PASSWORD_MIN_LENGTH} characters`);
+	}
+
+	updateUserPassword(userId, hashPassword(newPassword));
+	clearUserSessions(userId);
+	return getUserById(userId);
+}
+
+/**
+ * Permanently delete a hosted user's account. Verifies the password, then
+ * cascade-deletes every owned row (cloud_accounts, file_metadata, sessions,
+ * settings) via the users FK ON DELETE CASCADE. Caller is responsible for any
+ * provider-side token revocation before invoking this.
+ */
+export function deleteHostedUserAccount(userId, { password }) {
+	if (env.appMode !== 'hosted') {
+		throw new Error('Account deletion is only available in hosted mode');
+	}
+
+	const user = getUserById(userId);
+	if (!user) {
+		throw new Error('User not found');
+	}
+
+	if (!verifyPassword(password, user.password_hash)) {
+		throw new Error('Password is incorrect');
+	}
+
+	clearUserSessions(userId);
+	return deleteUser(userId);
+}
+
 export function getCookieOptions() {
 	return {
 		httpOnly: true,
 		sameSite: 'lax',
-		secure: false,
+		secure: env.authCookieSecure,
 		path: '/',
 	};
 }

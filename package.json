@@ -1,9 +1,14 @@
 {
   "name": "omnicloud",
   "version": "1.0.0",
-  "description": "",
+  "description": "Full-stack cloud drive aggregation platform that presents multiple storage providers through a single unified workspace.",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "dev": "npm-run-all --parallel dev:api dev:web",
     "build": "npm run build:web",
     "build:web": "npm --prefix frontend run build",
@@ -11,9 +16,20 @@
     "dev:api": "npm --prefix backend run dev",
     "start": "npm --prefix backend start"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": [
+    "cloud-storage",
+    "cloud-aggregation",
+    "google-drive",
+    "onedrive",
+    "dropbox",
+    "mega",
+    "pcloud",
+    "s3",
+    "vue",
+    "express"
+  ],
+  "author": "OmniCloud contributors",
+  "license": "MIT",
   "type": "module",
   "private": true,
   "workspaces": [
@@ -21,6 +37,14 @@
     "frontend"
   ],
   "devDependencies": {
-    "npm-run-all": "^4.1.5"
+    "@eslint/js": "^9.18.0",
+    "@vitest/eslint-plugin": "^1.1.44",
+    "eslint": "^9.18.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-vue": "^9.32.0",
+    "globals": "^15.14.0",
+    "npm-run-all": "^4.1.5",
+    "prettier": "^3.4.2",
+    "vitest": "^2.1.8"
   }
 }

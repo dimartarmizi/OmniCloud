@@ -176,33 +176,54 @@ export class OneDriveAdapter extends BaseCloudAdapter {
 	async fetchStructure() {
 		const records = [];
 
-		const walk = async (folderId = 'root', currentPath = '/') => {
-			const children = await this.listChildren(folderId);
+		// Breadth-first traversal that fetches sibling folders concurrently with a
+		// bounded fan-out, instead of a strictly serial depth-first walk. Deep
+		// trees previously produced N sequential Graph round-trips (latency grew
+		// linearly with folder count); processing each level in parallel batches
+		// collapses that to roughly tree-depth * (folders / concurrency) waits.
+		const CONCURRENCY = 6;
+		let frontier = [{ folderId: 'root', currentPath: '/' }];
 
-			for (const item of children) {
-				const virtualPath = normalizePath(currentPath);
-				const isFolder = Boolean(item.folder);
+		while (frontier.length) {
+			const nextFrontier = [];
 
-				records.push({
-					virtual_path: virtualPath,
-					file_name: item.name,
-					is_folder: isFolder,
-					is_starred: 0,
-					size: Number(item.size || 0),
-					mime_type: item.file?.mimeType || null,
-					remote_file_id: item.id,
-					remote_parent_id: item.parentReference?.id || (folderId === 'root' ? 'root' : folderId),
-					remote_created_time: item.createdDateTime || null,
-					remote_modified_time: item.lastModifiedDateTime || null,
-				});
+			for (let i = 0; i < frontier.length; i += CONCURRENCY) {
+				const batch = frontier.slice(i, i + CONCURRENCY);
+				const results = await Promise.all(
+					batch.map(async (node) => ({
+						node,
+						children: await this.listChildren(node.folderId),
+					})),
+				);
 
-				if (isFolder) {
-					await walk(item.id, `${virtualPath}${item.name}/`);
+				for (const { node, children } of results) {
+					const virtualPath = normalizePath(node.currentPath);
+					for (const item of children) {
+						const isFolder = Boolean(item.folder);
+						records.push({
+							virtual_path: virtualPath,
+							file_name: item.name,
+							is_folder: isFolder,
+							is_starred: 0,
+							size: Number(item.size || 0),
+							mime_type: item.file?.mimeType || null,
+							remote_file_id: item.id,
+							remote_parent_id:
+								item.parentReference?.id || (node.folderId === 'root' ? 'root' : node.folderId),
+							remote_created_time: item.createdDateTime || null,
+							remote_modified_time: item.lastModifiedDateTime || null,
+						});
+
+						if (isFolder) {
+							nextFrontier.push({ folderId: item.id, currentPath: `${virtualPath}${item.name}/` });
+						}
+					}
 				}
 			}
-		};
 
-		await walk('root', '/');
+			frontier = nextFrontier;
+		}
+
 		return records;
 	}
 
@@ -338,12 +359,13 @@ export class OneDriveAdapter extends BaseCloudAdapter {
 		};
 	}
 
-	async getDownloadStream(fileRecord) {
+	async getDownloadStream(fileRecord, { range } = {}) {
 		const response = await this.requestGraph(
 			`https://graph.microsoft.com/v1.0/me/drive/items/${encodeURIComponent(fileRecord.remote_file_id)}/content`,
+			range ? { headers: { Range: `bytes=${range.start}-${range.end}` } } : {},
 		);
 
-		if (!response.ok) {
+		if (!response.ok && response.status !== 206) {
 			let message = 'Failed to download file from OneDrive';
 			try {
 				const payload = await response.json();
@@ -371,6 +393,21 @@ export class OneDriveAdapter extends BaseCloudAdapter {
 				name: nextName,
 			}),
 		});
+	}
+
+	async moveFile(fileRecord, targetVirtualPath) {
+		const newParentId = await this.ensureRemotePath(targetVirtualPath);
+		// OneDrive moves by PATCHing the item's parentReference to the new folder.
+		const updated = await this.graph(`/me/drive/items/${encodeURIComponent(fileRecord.remote_file_id)}`, {
+			method: 'PATCH',
+			headers: {
+				'Content-Type': 'application/json',
+			},
+			body: JSON.stringify({
+				parentReference: { id: newParentId },
+			}),
+		});
+		return { remoteParentId: updated.parentReference?.id || newParentId };
 	}
 
 	async deleteFile(fileRecord) {

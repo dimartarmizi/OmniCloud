@@ -8,6 +8,12 @@ export const useAccountManagementStore = defineStore('accountManagement', {
 		isDisconnectingId: '',
 		error: null,
 	}),
+	getters: {
+		activeAccounts: (state) => state.accounts.filter((account) => account.status === 'active'),
+		hasActiveAccount() {
+			return this.activeAccounts.length > 0;
+		},
+	},
 	actions: {
 		async loadAccounts() {
 			this.isLoading = true;

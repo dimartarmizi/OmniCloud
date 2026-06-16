@@ -23,6 +23,10 @@ export class GoogleDriveAdapter extends BaseCloudAdapter {
 		};
 	}
 
+	supportsDeltaSync() {
+		return true;
+	}
+
 	createOAuthClient() {
 		const credentials = decryptJson(this.account.encrypted_credentials);
 		const oauthClient = new google.auth.OAuth2(
@@ -110,29 +114,55 @@ export class GoogleDriveAdapter extends BaseCloudAdapter {
 
 		const byId = new Map(files.map((file) => [file.id, file]));
 
-		const buildFolderPath = (file) => {
-			const parentId = file.parents?.[0];
-			if (!parentId || parentId === 'root') {
+		// Memoize each folder's own path so a parent chain shared by many files
+		// is walked at most once instead of re-traversed per descendant. Without
+		// this, building paths for N items in a tree of depth D costs O(N*D); the
+		// cache makes it O(N) amortized. Keyed by folder id; the value is that
+		// folder's full path including its trailing slash (e.g. "/a/b/").
+		const folderPathById = new Map();
+
+		const resolveFolderOwnPath = (folderId) => {
+			if (!folderId || folderId === 'root') {
 				return '/';
 			}
 
-			const segments = [];
-			const visited = new Set();
-			let currentId = parentId;
+			const cached = folderPathById.get(folderId);
+			if (cached !== undefined) {
+				return cached;
+			}
 
-			while (currentId && currentId !== 'root' && !visited.has(currentId)) {
+			// Walk up the unresolved ancestors, then fill the cache top-down so
+			// every visited folder is memoized in a single pass. A visited set
+			// guards against cyclic/broken parent references from the provider.
+			const chain = [];
+			const visited = new Set();
+			let currentId = folderId;
+
+			while (currentId && currentId !== 'root' && !visited.has(currentId) && !folderPathById.has(currentId)) {
 				visited.add(currentId);
 				const current = byId.get(currentId);
 				if (!current) {
+					currentId = null;
 					break;
 				}
-
-				segments.unshift(current.name);
+				chain.push(current);
 				currentId = current.parents?.[0];
 			}
 
-			return segments.length ? `/${segments.join('/')}/` : '/';
+			let basePath = currentId && folderPathById.has(currentId)
+				? folderPathById.get(currentId)
+				: '/';
+
+			for (let index = chain.length - 1; index >= 0; index -= 1) {
+				const folder = chain[index];
+				basePath = `${basePath}${folder.name}/`;
+				folderPathById.set(folder.id, basePath);
+			}
+
+			return folderPathById.get(folderId) || '/';
 		};
+
+		const buildFolderPath = (file) => resolveFolderOwnPath(file.parents?.[0]);
 
 		return files.map((file) => ({
 			virtual_path: buildFolderPath(file),
@@ -249,6 +279,71 @@ export class GoogleDriveAdapter extends BaseCloudAdapter {
 		};
 	}
 
+	/**
+	 * Seed the delta cursor after a full walk. Drive's startPageToken marks "now"
+	 * so the next sync can ask for only changes since this point.
+	 */
+	async getInitialDeltaToken() {
+		const drive = await this.getDriveClient();
+		const response = await drive.changes.getStartPageToken();
+		return response.data.startPageToken || null;
+	}
+
+	/**
+	 * Walk Drive's changes feed from the stored token. Returns whether anything
+	 * changed and the advanced token, without enumerating per-file paths: the
+	 * sync service uses `hasChanges` to skip the expensive full structure walk
+	 * when nothing changed (the common case for periodic syncs), and does a full
+	 * diff-upsert only when changes exist — which keeps denormalized descendant
+	 * paths correct across folder renames/moves. `expired` signals a stale token
+	 * so the caller falls back to a full sync and re-seeds.
+	 */
+	async getDeltaChanges(token) {
+		const drive = await this.getDriveClient();
+		let pageToken = token;
+		let hasChanges = false;
+
+		try {
+			while (pageToken) {
+				const response = await drive.changes.list({
+					pageToken,
+					pageSize: 100,
+					fields: 'newStartPageToken, nextPageToken, changes(fileId)',
+					includeRemoved: true,
+					supportsAllDrives: false,
+				});
+
+				if ((response.data.changes || []).length > 0) {
+					hasChanges = true;
+				}
+
+				// Once any change is seen, the sync service does a full structure
+				// walk and re-seeds the token via getInitialDeltaToken(), so the
+				// nextToken computed here is discarded. Stop paging the rest of the
+				// change feed instead of walking it to completion for no reason.
+				if (hasChanges) {
+					return { hasChanges: true, nextToken: null, expired: false };
+				}
+
+				if (response.data.nextPageToken) {
+					pageToken = response.data.nextPageToken;
+					continue;
+				}
+
+				return { hasChanges, nextToken: response.data.newStartPageToken || null, expired: false };
+			}
+
+			return { hasChanges, nextToken: token, expired: false };
+		} catch (error) {
+			// A 404/410 on the page token means it has expired; signal a full resync.
+			const status = error?.code || error?.response?.status;
+			if (status === 404 || status === 410) {
+				return { hasChanges: true, nextToken: null, expired: true };
+			}
+			throw error;
+		}
+	}
+
 	async uploadStream({ stream, fileName, mimeType, virtualPath, remoteParentId, onProgress }) {
 		const drive = await this.getDriveClient();
 		const parentId = remoteParentId || await this.ensureRemotePath(virtualPath);
@@ -300,7 +395,7 @@ export class GoogleDriveAdapter extends BaseCloudAdapter {
 		};
 	}
 
-	async getDownloadStream(fileRecord) {
+	async getDownloadStream(fileRecord, { range } = {}) {
 		const drive = await this.getDriveClient();
 		const response = await drive.files.get(
 			{
@@ -309,6 +404,9 @@ export class GoogleDriveAdapter extends BaseCloudAdapter {
 			},
 			{
 				responseType: 'stream',
+				// Drive honors the HTTP Range header on alt=media downloads and
+				// replies 206 with only the requested bytes, enabling seek/resume.
+				...(range ? { headers: { Range: `bytes=${range.start}-${range.end}` } } : {}),
 			},
 		);
 
@@ -324,6 +422,25 @@ export class GoogleDriveAdapter extends BaseCloudAdapter {
 			},
 			fields: 'id, name',
 		});
+	}
+
+	async moveFile(fileRecord, targetVirtualPath) {
+		const drive = await this.getDriveClient();
+		const newParentId = await this.ensureRemotePath(targetVirtualPath);
+		// Drive moves are expressed as a parent reparent: add the new parent and
+		// remove the previous one(s) in a single update.
+		const current = await drive.files.get({
+			fileId: fileRecord.remote_file_id,
+			fields: 'parents',
+		});
+		const previousParents = (current.data.parents || []).join(',');
+		await drive.files.update({
+			fileId: fileRecord.remote_file_id,
+			addParents: newParentId,
+			removeParents: previousParents || undefined,
+			fields: 'id, parents',
+		});
+		return { remoteParentId: newParentId };
 	}
 
 	async deleteFile(fileRecord) {
@@ -357,7 +474,18 @@ export class GoogleDriveAdapter extends BaseCloudAdapter {
 			remote_file_id: remote.id,
 			remote_parent_id: remote.parents?.[0] || fileRecord.remote_parent_id || null,
 			remote_drive_id: null,
-			provider: 'google-drive',
+			provider: 'google_drive',
 		};
+	}
+
+	async revokeAccess() {
+		try {
+			const oauthClient = this.createOAuthClient();
+			await oauthClient.revokeCredentials();
+			return true;
+		} catch (error) {
+			console.warn(`[google_drive] token revoke failed for ${this.account.email}:`, error?.message || error);
+			return false;
+		}
 	}
 }

@@ -3,7 +3,7 @@ const AUTH_ERROR_PATTERN =
 
 
 const TRANSIENT_ERROR_PATTERN =
-	/\b(429|500|502|503|504|408)\b|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|ECONNREFUSED|EPIPE|ESID|socket hang up|network|fetch failed|rate.?limit|too many requests|temporar(?:y|ily)|busy|congestion|server malfunction|try again|timeout|utype/i;
+	/\b(429|500|502|503|504|408)\b|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|EAGAIN|ECONNREFUSED|EPIPE|ESID|socket hang up|network|fetch failed|rate.?limit|too many requests|temporar(?:y|ily)|busy|congestion|server malfunction|try again|timeout|utype/i;
 
 function errorMessage(error) {
 	if (!error) return '';
@@ -37,6 +37,15 @@ export function isTransientError(error) {
 	if (isAuthError(error)) return false;
 	return TRANSIENT_ERROR_PATTERN.test(errorMessage(error));
 }
+
+/**
+ * Canonical name for the transient-error check, used uniformly across the
+ * backend (sync backoff, upload fallback, the server-level safety net, and
+ * provider-specific connect retries) so "is this safe to retry / log-and-
+ * continue?" has exactly one implementation. `isTransientError` is kept as an
+ * alias for existing callers/tests.
+ */
+export const isTransientProviderError = isTransientError;
 
 function sleep(ms) {
 	return new Promise((resolve) => setTimeout(resolve, ms));

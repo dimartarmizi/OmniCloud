@@ -1,5 +1,6 @@
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import { api } from '../services/api';
+import { confirmDialog, promptDialog } from './useDialog.js';
 import { useContextMenu } from './useContextMenu';
 import { useFileSelection } from './useFileSelection';
 import { useFilePreviewModal } from './useFilePreviewModal';
@@ -48,6 +49,7 @@ export function useFileActions({
 	const {
 		detailsFile,
 		isDetailsOpen,
+		isDetailsLoading,
 		openDetails,
 		closeDetails,
 	} = useFileDetailsModal({
@@ -118,8 +120,13 @@ export function useFileActions({
 	async function renameSelectedFile({ trackServerOperation } = {}) {
 		const file = resolveFile();
 		if (!file) return;
-		const nextName = window.prompt(t('drive.newNamePrompt'), file.file_name);
 		closeContextMenu();
+		const nextName = await promptDialog({
+			title: t('common.rename'),
+			confirmLabel: t('common.rename'),
+			defaultValue: file.file_name,
+			placeholder: t('drive.newNamePrompt'),
+		});
 		if (!nextName?.trim() || nextName.trim() === file.file_name) return;
 		errorRef.value = '';
 		try {
@@ -141,8 +148,13 @@ export function useFileActions({
 			? t('drive.deleteConfirm', { name: targets[0].file_name })
 			: t('drive.deleteConfirm', { name: `${targets.length} ${t('common.items')}` });
 
-		const confirmed = window.confirm(message);
 		closeContextMenu();
+		const confirmed = await confirmDialog({
+			title: t('common.delete'),
+			message,
+			confirmLabel: t('common.delete'),
+			destructive: true,
+		});
 		if (!confirmed) return;
 		errorRef.value = '';
 		try {
@@ -167,10 +179,44 @@ export function useFileActions({
 		}
 	}
 
-	async function toggleSelectedFileStar() {
+	const moveFile = ref(null);
+	const isMoveOpen = ref(false);
+
+	const canMoveSelection = computed(
+		() => selectedCount.value === 1 && primarySelectedFile.value?.capabilities?.rename !== false,
+	);
+
+	function openMoveDialog() {
 		const file = resolveFile();
+		if (!file) return;
+		closeContextMenu();
+		errorRef.value = '';
+		moveFile.value = file;
+		isMoveOpen.value = true;
+	}
+
+	function closeMoveDialog() {
+		isMoveOpen.value = false;
+		moveFile.value = null;
+	}
+
+	async function confirmMove(targetPath) {
+		const file = moveFile.value;
+		if (!file || typeof targetPath !== 'string') return;
+		errorRef.value = '';
+		try {
+			await runWithProgress(t('common.move'), () => api.moveFile(file.id, targetPath));
+			closeMoveDialog();
+			clearSelection();
+			await refresh();
+		} catch (error) {
+			errorRef.value = error.message;
+		}
+	}
+
+	async function toggleSelectedFileStar() {		const file = resolveFile();
 		if (!file || !file.capabilities?.starred) return;
-		const nextStarred = !Boolean(file.is_starred);
+		const nextStarred = !file.is_starred;
 		const label = nextStarred ? t('drive.star') : t('drive.unstar');
 		closeContextMenu();
 		errorRef.value = '';
@@ -226,6 +272,7 @@ export function useFileActions({
 		handlePreviewFailed,
 		detailsFile,
 		isDetailsOpen,
+		isDetailsLoading,
 		openDetails,
 		closeDetails,
 		renameSelectedFile,
@@ -240,5 +287,11 @@ export function useFileActions({
 		isPrimarySelectedStarred,
 		canOpenSelection,
 		canPreviewSelection,
+		moveFile,
+		isMoveOpen,
+		canMoveSelection,
+		openMoveDialog,
+		closeMoveDialog,
+		confirmMove,
 	};
 }

@@ -11,6 +11,34 @@ export const ALLOCATION_STRATEGIES = [
 
 export const DEFAULT_STRATEGY = 'round_robin';
 
+// Dragging N files fires N sequential /uploads/initiate calls in a short burst.
+// Each call reads the strategy/order config and the active-account list from
+// SQLite. These reads are identical across the burst (used_space only changes
+// once bytes actually stream, which happens after all initiations), so we
+// memoize them per-user for a short window to avoid 2*N redundant queries.
+// Rotation state (cursor/SWRR) is intentionally NOT cached: it must advance on
+// every allocation. Writes invalidate the cache so a strategy/order change or a
+// newly connected account is reflected immediately.
+const READ_CACHE_TTL_MS = 2000;
+const configCache = new Map();
+const activeAccountsCache = new Map();
+
+function readCached(cache, userId, loader) {
+	const now = Date.now();
+	const hit = cache.get(userId);
+	if (hit && hit.expiresAt > now) {
+		return hit.value;
+	}
+	const value = loader();
+	cache.set(userId, { value, expiresAt: now + READ_CACHE_TTL_MS });
+	return value;
+}
+
+function invalidateAllocationCache(userId) {
+	configCache.delete(userId);
+	activeAccountsCache.delete(userId);
+}
+
 const SETTING_KEYS = {
 	strategy: 'allocation_strategy',
 	order: 'allocation_order',
@@ -44,15 +72,17 @@ function parseJson(value, fallback) {
 }
 
 export function getAllocationConfig(userId) {
-	const strategyRaw = readSetting(userId, SETTING_KEYS.strategy);
-	const strategy = ALLOCATION_STRATEGIES.includes(strategyRaw) ? strategyRaw : DEFAULT_STRATEGY;
-	const order = parseJson(readSetting(userId, SETTING_KEYS.order), []).filter((id) => typeof id === 'string');
+	return readCached(configCache, userId, () => {
+		const strategyRaw = readSetting(userId, SETTING_KEYS.strategy);
+		const strategy = ALLOCATION_STRATEGIES.includes(strategyRaw) ? strategyRaw : DEFAULT_STRATEGY;
+		const order = parseJson(readSetting(userId, SETTING_KEYS.order), []).filter((id) => typeof id === 'string');
 
-	return { strategy, order };
+		return { strategy, order };
+	});
 }
 
 export function getOrderedActiveAccounts(userId) {
-	const active = getActiveAccounts(userId);
+	const active = readCached(activeAccountsCache, userId, () => getActiveAccounts(userId));
 	const { order } = getAllocationConfig(userId);
 	const byId = new Map(active.map((account) => [account.id, account]));
 
@@ -100,6 +130,8 @@ export function setAllocationConfig(userId, { strategy, order } = {}) {
 	if (shouldReset) {
 		resetRotationState(userId);
 	}
+
+	invalidateAllocationCache(userId);
 
 	return { strategy: nextStrategy, order: nextOrder };
 }

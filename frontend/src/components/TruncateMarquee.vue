@@ -18,7 +18,6 @@ const trackRef = ref(null);
 const marqueeDistance = ref(0);
 let resizeObserver = null;
 let marqueeAnimation = null;
-let isUnmounted = false;
 
 const PAUSE_MS = 3000;
 const MARQUEE_SPEED = 42;
@@ -95,20 +94,30 @@ onMounted(async () => {
 	updateMarqueeDistance();
 	scheduleMarqueeCycle();
 
+	// Observe only the container for layout changes. The expensive part — the
+	// infinite Element.animate cycle — is created lazily by scheduleMarqueeCycle
+	// and ONLY when the text actually overflows its box, so the common case
+	// (text that fits) attaches no animation at all. Content changes are handled
+	// by the textValue watcher, so observing the inner text node too would be
+	// redundant work multiplied across the hundreds of marquees a list renders.
 	resizeObserver = new ResizeObserver(updateMarqueeDistance);
 	if (containerRef.value) resizeObserver.observe(containerRef.value);
-	if (textRef.value) resizeObserver.observe(textRef.value);
 });
 
 onBeforeUnmount(() => {
-	isUnmounted = true;
 	clearMarqueeCycle();
 	resizeObserver?.disconnect();
 });
 </script>
 
 <template>
-	<component :is="props.as" ref="containerRef" class="truncate-marquee" :class="{ 'is-overflowing': isOverflowing }" :title="textValue">
+	<component
+		:is="props.as"
+		ref="containerRef"
+		class="truncate-marquee"
+		:class="{ 'is-overflowing': isOverflowing }"
+		:title="textValue"
+	>
 		<span ref="trackRef" class="truncate-marquee__track">
 			<span ref="textRef" class="truncate-marquee__text">{{ props.text }}</span>
 		</span>

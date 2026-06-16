@@ -72,5 +72,43 @@ export const useAuthStore = defineStore('auth', {
 				this.user = null;
 			}
 		},
+		async changePassword({ currentPassword, newPassword }) {
+			this.loading = true;
+			this.error = null;
+			try {
+				const { data } = await authApi.changePassword({
+					current_password: currentPassword,
+					new_password: newPassword,
+				});
+				this.applySummary(data);
+				return true;
+			} catch (error) {
+				this.error = error.message;
+				return false;
+			} finally {
+				this.loading = false;
+			}
+		},
+		async deleteAccount({ password }) {
+			this.loading = true;
+			this.error = null;
+			try {
+				await authApi.deleteAccount({ password });
+				this.applySummary({ mode: 'hosted', requiresAuth: true, authenticated: false });
+				return true;
+			} catch (error) {
+				this.error = error.message;
+				return false;
+			} finally {
+				this.loading = false;
+			}
+		},
+		// Called centrally when any API request returns 401 in hosted mode: clear
+		// the authenticated state so guards and UI reflect the expired session.
+		handleUnauthorized() {
+			if (!this.requiresAuth) return;
+			this.authenticated = false;
+			this.user = null;
+		},
 	},
 });

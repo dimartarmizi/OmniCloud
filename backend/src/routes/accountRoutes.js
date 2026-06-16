@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { deleteAccount, getAccountById, listAccounts } from '../services/accountService.js';
 import { env } from '../config/env.js';
 import { requireAppUser } from '../middleware/authMiddleware.js';
+import { AppError } from '../utils/AppError.js';
 import {
 	createGoogleAuthorizationRequest,
 	completeGoogleAccountLink,
@@ -23,14 +24,112 @@ import {
 	completeYandexAccountLink,
 	getYandexIntegrationStatus,
 } from '../services/yandexOAuthService.js';
-import {
-	connectS3Account,
-	connectPCloudAccount,
-} from '../services/externalAccountService.js';
+import { connectS3Account, connectPCloudAccount } from '../services/externalAccountService.js';
 import { clearFilesForAccount } from '../services/fileService.js';
+import { createAdapter } from '../services/adapterRegistry.js';
 
 const router = Router();
 
+// OAuth provider callbacks are top-level cross-site GET redirects from the
+// provider back to us. They MUST NOT sit behind requireAppUser: relying on the
+// session cookie during a cross-site redirect is fragile (and wrong in hosted
+// mode). Instead they are authenticated strictly by the signed, single-use
+// `state` persisted in oauth_states, which already binds the originating
+// user_id. So these routes are registered BEFORE the requireAppUser guard below.
+router.get('/accounts/google/callback', async (req, res) => {
+	const frontendUrl = new URL(env.frontendUrl);
+	frontendUrl.pathname = '/quota';
+
+	try {
+		const { code, state, error } = req.query;
+
+		if (error) {
+			frontendUrl.searchParams.set('google', 'error');
+			frontendUrl.searchParams.set('message', String(error));
+			return res.redirect(frontendUrl.toString());
+		}
+
+		await completeGoogleAccountLink({ code: String(code || ''), state: String(state || '') });
+		frontendUrl.searchParams.set('google', 'connected');
+		return res.redirect(frontendUrl.toString());
+	} catch (error) {
+		frontendUrl.searchParams.set('google', 'error');
+		frontendUrl.searchParams.set('message', error.message);
+		return res.redirect(frontendUrl.toString());
+	}
+});
+
+router.get('/accounts/onedrive/callback', async (req, res) => {
+	const frontendUrl = new URL(env.frontendUrl);
+	frontendUrl.pathname = '/quota';
+
+	try {
+		const { code, state, error } = req.query;
+
+		if (error) {
+			frontendUrl.searchParams.set('onedrive', 'error');
+			frontendUrl.searchParams.set('message', String(error));
+			return res.redirect(frontendUrl.toString());
+		}
+
+		await completeOneDriveAccountLink({ code: String(code || ''), state: String(state || '') });
+		frontendUrl.searchParams.set('onedrive', 'connected');
+		return res.redirect(frontendUrl.toString());
+	} catch (error) {
+		frontendUrl.searchParams.set('onedrive', 'error');
+		frontendUrl.searchParams.set('message', error.message);
+		return res.redirect(frontendUrl.toString());
+	}
+});
+
+router.get('/accounts/dropbox/callback', async (req, res) => {
+	const frontendUrl = new URL(env.frontendUrl);
+	frontendUrl.pathname = '/quota';
+
+	try {
+		const { code, state, error, error_description } = req.query;
+
+		if (error) {
+			frontendUrl.searchParams.set('dropbox', 'error');
+			frontendUrl.searchParams.set('message', String(error_description || error));
+			return res.redirect(frontendUrl.toString());
+		}
+
+		await completeDropboxAccountLink({ code: String(code || ''), state: String(state || '') });
+		frontendUrl.searchParams.set('dropbox', 'connected');
+		return res.redirect(frontendUrl.toString());
+	} catch (error) {
+		frontendUrl.searchParams.set('dropbox', 'error');
+		frontendUrl.searchParams.set('message', error.message);
+		return res.redirect(frontendUrl.toString());
+	}
+});
+
+router.get('/accounts/yandex/callback', async (req, res) => {
+	const frontendUrl = new URL(env.frontendUrl);
+	frontendUrl.pathname = '/quota';
+
+	try {
+		const { code, state, error, error_description } = req.query;
+
+		if (error) {
+			frontendUrl.searchParams.set('yandex', 'error');
+			frontendUrl.searchParams.set('message', String(error_description || error));
+			return res.redirect(frontendUrl.toString());
+		}
+
+		await completeYandexAccountLink({ code: String(code || ''), state: String(state || '') });
+		frontendUrl.searchParams.set('yandex', 'connected');
+		return res.redirect(frontendUrl.toString());
+	} catch (error) {
+		console.error('[yandex] callback failed:', error);
+		frontendUrl.searchParams.set('yandex', 'error');
+		frontendUrl.searchParams.set('message', error.message);
+		return res.redirect(frontendUrl.toString());
+	}
+});
+
+// Everything below requires an authenticated app user.
 router.use(requireAppUser);
 
 router.get('/accounts', (req, res) => {
@@ -125,109 +224,29 @@ router.get('/accounts/yandex/connect', (req, res, next) => {
 	}
 });
 
-router.get('/accounts/google/callback', async (req, res) => {
-	const frontendUrl = new URL(env.frontendUrl);
-	frontendUrl.pathname = '/quota';
-
+router.delete('/accounts/:id', async (req, res, next) => {
 	try {
-		const { code, state, error } = req.query;
-
-		if (error) {
-			frontendUrl.searchParams.set('google', 'error');
-			frontendUrl.searchParams.set('message', String(error));
-			return res.redirect(frontendUrl.toString());
+		const account = getAccountById(req.user.id, req.params.id);
+		if (!account) {
+			throw new AppError('Account not found', 404, 'ACCOUNT_NOT_FOUND');
 		}
 
-		await completeGoogleAccountLink({ code: String(code || ''), state: String(state || '') });
-		frontendUrl.searchParams.set('google', 'connected');
-		return res.redirect(frontendUrl.toString());
-	} catch (error) {
-		frontendUrl.searchParams.set('google', 'error');
-		frontendUrl.searchParams.set('message', error.message);
-		return res.redirect(frontendUrl.toString());
-	}
-});
-
-router.get('/accounts/onedrive/callback', async (req, res) => {
-	const frontendUrl = new URL(env.frontendUrl);
-	frontendUrl.pathname = '/quota';
-
-	try {
-		const { code, state, error } = req.query;
-
-		if (error) {
-			frontendUrl.searchParams.set('onedrive', 'error');
-			frontendUrl.searchParams.set('message', String(error));
-			return res.redirect(frontendUrl.toString());
+		// Best-effort: revoke the provider-side token before we drop the local
+		// credentials, so disconnecting also severs OAuth access where supported.
+		// Never block disconnect on a provider revoke failure.
+		try {
+			await createAdapter(account).revokeAccess();
+		} catch (error) {
+			console.warn(`Token revoke failed during disconnect of ${account.email}:`, error?.message || error);
 		}
 
-		await completeOneDriveAccountLink({ code: String(code || ''), state: String(state || '') });
-		frontendUrl.searchParams.set('onedrive', 'connected');
-		return res.redirect(frontendUrl.toString());
+		clearFilesForAccount(req.user.id, account.id);
+		deleteAccount(req.user.id, account.id);
+
+		return res.json({ data: { success: true } });
 	} catch (error) {
-		frontendUrl.searchParams.set('onedrive', 'error');
-		frontendUrl.searchParams.set('message', error.message);
-		return res.redirect(frontendUrl.toString());
+		next(error);
 	}
-});
-
-router.get('/accounts/dropbox/callback', async (req, res) => {
-	const frontendUrl = new URL(env.frontendUrl);
-	frontendUrl.pathname = '/quota';
-
-	try {
-		const { code, state, error, error_description } = req.query;
-
-		if (error) {
-			frontendUrl.searchParams.set('dropbox', 'error');
-			frontendUrl.searchParams.set('message', String(error_description || error));
-			return res.redirect(frontendUrl.toString());
-		}
-
-		await completeDropboxAccountLink({ code: String(code || ''), state: String(state || '') });
-		frontendUrl.searchParams.set('dropbox', 'connected');
-		return res.redirect(frontendUrl.toString());
-	} catch (error) {
-		frontendUrl.searchParams.set('dropbox', 'error');
-		frontendUrl.searchParams.set('message', error.message);
-		return res.redirect(frontendUrl.toString());
-	}
-});
-
-router.get('/accounts/yandex/callback', async (req, res) => {
-	const frontendUrl = new URL(env.frontendUrl);
-	frontendUrl.pathname = '/quota';
-
-	try {
-		const { code, state, error, error_description } = req.query;
-
-		if (error) {
-			frontendUrl.searchParams.set('yandex', 'error');
-			frontendUrl.searchParams.set('message', String(error_description || error));
-			return res.redirect(frontendUrl.toString());
-		}
-
-		await completeYandexAccountLink({ code: String(code || ''), state: String(state || '') });
-		frontendUrl.searchParams.set('yandex', 'connected');
-		return res.redirect(frontendUrl.toString());
-	} catch (error) {
-		console.error('[yandex] callback failed:', error);
-		frontendUrl.searchParams.set('yandex', 'error');
-		frontendUrl.searchParams.set('message', error.message);
-		return res.redirect(frontendUrl.toString());
-	}
-});
-
-router.delete('/accounts/:id', (req, res) => {
-	const account = getAccountById(req.user.id, req.params.id);
-	if (!account) {
-		return res.status(404).json({ error: 'Account not found' });
-	}
-
-	clearFilesForAccount(req.user.id, account.id);
-	deleteAccount(req.user.id, account.id);
-
-	return res.json({ data: { success: true } });
 });
 
 export default router;

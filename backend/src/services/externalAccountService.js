@@ -1,5 +1,4 @@
 import { randomUUID } from 'crypto';
-import { env } from '../config/env.js';
 import { upsertCloudAccount, markAccountStatus } from './accountService.js';
 import { syncAccount } from './syncService.js';
 import { pcloudLogin } from '../utils/pcloudClient.js';
@@ -8,6 +7,61 @@ import { S3Client, HeadBucketCommand } from '@aws-sdk/client-s3';
 const GIB = 1024 * 1024 * 1024;
 
 const DEFAULT_S3_TOTAL_SPACE = 10 * GIB;
+
+// Block obvious SSRF targets: the S3 endpoint is user-supplied and used to make
+// outbound requests from the server, so it must be a public https URL and must
+// not point at localhost, link-local, or private/internal ranges. This is a
+// best-effort hostname/IP check (not a full network-policy guard) but stops the
+// common "point the server at the cloud metadata endpoint / intranet" attack.
+function assertSafeS3Endpoint(rawEndpoint) {
+	let url;
+	try {
+		url = new URL(rawEndpoint);
+	} catch {
+		throw new Error('Endpoint must be a valid URL (e.g. https://s3.example.com)');
+	}
+
+	if (url.protocol !== 'https:') {
+		throw new Error('Endpoint must use https.');
+	}
+
+	const host = url.hostname.toLowerCase();
+
+	if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.internal') || host.endsWith('.local')) {
+		throw new Error('Endpoint host is not allowed.');
+	}
+
+	// Cloud metadata service and loopback/link-local literals.
+	if (host === '169.254.169.254' || host === '[::1]' || host === '::1') {
+		throw new Error('Endpoint host is not allowed.');
+	}
+
+	// IPv4 private / loopback / link-local ranges.
+	const ipv4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+	if (ipv4) {
+		const [a, b] = ipv4.slice(1).map(Number);
+		const isPrivate =
+			a === 10 ||
+			a === 127 ||
+			(a === 169 && b === 254) ||
+			(a === 172 && b >= 16 && b <= 31) ||
+			(a === 192 && b === 168) ||
+			a === 0;
+		if (isPrivate) {
+			throw new Error('Endpoint host is not allowed (private/loopback address).');
+		}
+	}
+
+	// IPv6 private (unique-local fc00::/7) and link-local (fe80::/10).
+	if (host.startsWith('[')) {
+		const inner = host.slice(1, -1);
+		if (/^(fc|fd|fe8|fe9|fea|feb)/i.test(inner)) {
+			throw new Error('Endpoint host is not allowed (private/link-local address).');
+		}
+	}
+
+	return url.toString();
+}
 
 function buildEmailLabel(provider, identifier) {
 	return identifier || `${provider}-account`;
@@ -30,11 +84,13 @@ export async function connectS3Account(userId, body = {}) {
 	}
 
 	const region = regionInput || 'auto';
-	const endpoint = endpointInput || undefined;
 
-	if (!endpoint) {
+	if (!endpointInput) {
 		throw new Error('Endpoint is required (e.g. https://your-s3-endpoint)');
 	}
+
+	// Validate/normalize the endpoint before it is used for any outbound request.
+	const endpoint = assertSafeS3Endpoint(endpointInput);
 
 	const client = new S3Client({
 		region,

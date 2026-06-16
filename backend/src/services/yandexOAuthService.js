@@ -1,9 +1,8 @@
-import { randomUUID } from 'crypto';
 import { env } from '../config/env.js';
-import { upsertCloudAccount } from './accountService.js';
-import { syncAccount } from './syncService.js';
+import { createOAuthStateStore } from '../utils/oauthStateStore.js';
+import { beginOAuthFlow, completeOAuthLink } from '../utils/oauthFlowHelper.js';
 
-const oauthStates = new Map();
+const oauthStates = createOAuthStateStore();
 
 function assertYandexConfigured() {
 	if (!env.yandexClientId || !env.yandexClientSecret) {
@@ -60,8 +59,7 @@ export function getYandexIntegrationStatus() {
 export function createYandexAuthorizationRequest(userId) {
 	assertYandexConfigured();
 
-	const state = randomUUID();
-	oauthStates.set(state, { userId, createdAt: Date.now() });
+	const state = beginOAuthFlow(oauthStates, userId);
 
 	const authorizationUrl = new URL('https://oauth.yandex.com/authorize');
 	authorizationUrl.searchParams.set('response_type', 'code');
@@ -80,43 +78,35 @@ export function createYandexAuthorizationRequest(userId) {
 export async function completeYandexAccountLink({ code, state }) {
 	assertYandexConfigured();
 
-	if (!code || !state) {
-		throw new Error('Missing Yandex OAuth code or state');
-	}
-
-	const authState = oauthStates.get(state);
-	if (!authState) {
-		throw new Error('Invalid or expired Yandex OAuth state');
-	}
-
-	oauthStates.delete(state);
-
-	const tokens = await exchangeCodeForTokens(code);
-	const profile = await fetchYandexProfile(tokens.access_token);
-
-	const account = upsertCloudAccount({
-		userId: authState.userId,
-		id: randomUUID(),
-		email: profile.email,
+	return completeOAuthLink({
+		store: oauthStates,
 		provider: 'yandex',
-		credentials: {
-			provider: 'yandex',
-			accessToken: tokens.access_token,
-			refreshToken: tokens.refresh_token || null,
-			clientId: env.yandexClientId,
-			clientSecret: env.yandexClientSecret,
-			expiresIn: tokens.expires_in || null,
-			tokenType: tokens.token_type || 'bearer',
-			displayName: profile.displayName,
+		providerLabel: 'Yandex',
+		code,
+		state,
+		syncOptional: true,
+		exchange: async (authorizationCode) => {
+			const tokens = await exchangeCodeForTokens(authorizationCode);
+			const profile = await fetchYandexProfile(tokens.access_token);
+
+			return {
+				account: {
+					email: profile.email,
+					credentials: {
+						provider: 'yandex',
+						accessToken: tokens.access_token,
+						refreshToken: tokens.refresh_token || null,
+						clientId: env.yandexClientId,
+						clientSecret: env.yandexClientSecret,
+						expiresIn: tokens.expires_in || null,
+						tokenType: tokens.token_type || 'bearer',
+						displayName: profile.displayName,
+					},
+					total_space: profile.totalSpace,
+					used_space: profile.usedSpace,
+				},
+				profile,
+			};
 		},
-		total_space: profile.totalSpace,
-		used_space: profile.usedSpace,
-		status: 'active',
 	});
-
-	await syncAccount(authState.userId, account).catch((error) => {
-		console.warn('[yandex] initial sync failed:', error.message);
-	});
-
-	return { account, profile };
 }

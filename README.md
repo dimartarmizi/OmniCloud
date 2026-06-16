@@ -13,16 +13,19 @@ OmniCloud is a full-stack cloud drive aggregation platform that presents multipl
 ## ✨ Key features
 
 ### ☁️ Multi-provider cloud aggregation
+
 - Connect multiple cloud storage accounts in one application
 - All providers are normalized through a consistent adapter layer
 - Active provider support includes OAuth, account-based login, and access-key-based connections
 
 ### 🗂️ Unified file workspace
+
 - `Home`, `My Drive`, `Recent`, `Starred`, `Shared with Me`, and `Quota` views
 - Virtual-path-based file navigation across providers
 - File metadata is presented consistently across different provider sources
 
 ### 📁 File management
+
 - Browse files and folders from connected accounts
 - Create folders
 - Rename files and folders
@@ -32,6 +35,7 @@ OmniCloud is a full-stack cloud drive aggregation platform that presents multipl
 - Star / unstar files on providers that support it
 
 ### ⬆️ Upload system
+
 - Browser-based file uploads
 - Folder upload support
 - Drag-and-drop uploads
@@ -40,24 +44,28 @@ OmniCloud is a full-stack cloud drive aggregation platform that presents multipl
 - Automatic upload account allocation based on storage selection strategy
 
 ### 🔄 Sync and metadata mirror
+
 - File metadata is stored in SQLite for fast navigation
 - Account synchronization runs on a schedule using `node-cron`
+- Incremental delta sync: providers that expose change tokens (e.g. Google Drive) are first asked whether anything changed, skipping the full structure walk when nothing did; other providers do a full walk that is diffed against the mirror so only changed rows are written
 - The API exposes a manual sync trigger
 - Delta sync reports are available through the health/sync layer
 
 ### 👤 Auth and app modes
+
 - `local` mode for personal or simple self-hosted usage
 - `hosted` mode for multi-user deployments with session-cookie-based register/login/logout
 - Account data, file mirrors, allocation config, and settings are scoped per user
 
 ### ⚙️ User settings and storage allocation
+
 - User settings such as language and theme
 - Storage allocation strategies:
-  - `round_robin`
-  - `weighted_round_robin`
-  - `least_used`
-  - `most_free`
-  - `manual`
+    - `round_robin`
+    - `weighted_round_robin`
+    - `least_used`
+    - `most_free`
+    - `manual`
 - Account priority order can be configured for the manual strategy
 
 ## Preview
@@ -68,14 +76,14 @@ OmniCloud is a full-stack cloud drive aggregation platform that presents multipl
 
 ## ☁️ Supported providers
 
-| Provider | Status | Integration model |
-| --- | --- | --- |
-| Google Drive | Active | OAuth + Google Drive API |
-| OneDrive | Active | OAuth + Microsoft Graph |
-| Dropbox | Active | OAuth + Dropbox API |
-| Yandex Disk | Active | OAuth + Yandex Disk API |
-| MEGA | Active | Email/password account connection |
-| pCloud | Active | Email/password account connection |
+| Provider              | Status | Integration model                        |
+| --------------------- | ------ | ---------------------------------------- |
+| Google Drive          | Active | OAuth + Google Drive API                 |
+| OneDrive              | Active | OAuth + Microsoft Graph                  |
+| Dropbox               | Active | OAuth + Dropbox API                      |
+| Yandex Disk           | Active | OAuth + Yandex Disk API                  |
+| MEGA                  | Active | Email/password account connection        |
+| pCloud                | Active | Email/password account connection        |
 | S3-compatible storage | Active | Access key / secret key / endpoint based |
 
 > Detailed provider credential setup is available in [`docs/provider-setup.md`](docs/provider-setup.md).
@@ -93,6 +101,7 @@ OmniCloud/
 ```
 
 ## 🔄 How OmniCloud works
+
 ```mermaid
 flowchart TD
     U[User] --> F[Frontend<br/>Vue 3 + Vite]
@@ -152,6 +161,7 @@ flowchart TD
     B --> AU[Auth & Session Layer]
     AU --> DB
 ```
+
 At a high level:
 
 1. The frontend calls the REST API for auth, accounts, files, uploads, settings, and allocation
@@ -242,6 +252,7 @@ YANDEX_REDIRECT_URI=http://localhost:8787/api/accounts/yandex/callback
 ```
 
 Notes:
+
 - MEGA and pCloud do not use `.env` credentials; they are connected from the UI using email/password
 - S3-compatible storage is configured from the UI using endpoint/bucket/access key/secret key
 - `APP_MODE=hosted` enables the register/login/logout flow using session cookies
@@ -315,45 +326,48 @@ docker compose down -v
 
 ### Root scripts
 
-| Script | Description |
-| --- | --- |
-| `npm run dev` | Run frontend and backend in parallel |
-| `npm run build` | Build the production frontend |
-| `npm run build:web` | Build only the frontend |
-| `npm run dev:web` | Run the Vite dev server |
-| `npm run dev:api` | Run the backend with `node --watch` |
-| `npm start` | Start the backend without watch mode |
+| Script              | Description                          |
+| ------------------- | ------------------------------------ |
+| `npm run dev`       | Run frontend and backend in parallel |
+| `npm run build`     | Build the production frontend        |
+| `npm run build:web` | Build only the frontend              |
+| `npm run dev:web`   | Run the Vite dev server              |
+| `npm run dev:api`   | Run the backend with `node --watch`  |
+| `npm start`         | Start the backend without watch mode |
 
 ### Frontend scripts
 
-| Script | Description |
-| --- | --- |
-| `npm --prefix frontend run dev` | Start the Vite dev server |
-| `npm --prefix frontend run build` | Build the frontend |
+| Script                              | Description                |
+| ----------------------------------- | -------------------------- |
+| `npm --prefix frontend run dev`     | Start the Vite dev server  |
+| `npm --prefix frontend run build`   | Build the frontend         |
 | `npm --prefix frontend run preview` | Preview the built frontend |
 
 ### Backend scripts
 
-| Script | Description |
-| --- | --- |
+| Script                         | Description                 |
+| ------------------------------ | --------------------------- |
 | `npm --prefix backend run dev` | Run the API with file watch |
-| `npm --prefix backend start` | Run the API normally |
+| `npm --prefix backend start`   | Run the API normally        |
 
 ## 🔌 API overview
 
 These are the main API surfaces currently present in the project.
 
 ### Health and sync
+
 - `GET /api/health`
 - `POST /api/sync/run`
 
 ### Authentication
+
 - `GET /api/auth/me`
 - `POST /api/auth/register`
 - `POST /api/auth/login`
 - `POST /api/auth/logout`
 
 ### Accounts
+
 - `GET /api/accounts`
 - `DELETE /api/accounts/:id`
 - `GET /api/accounts/google/status`
@@ -371,6 +385,7 @@ These are the main API surfaces currently present in the project.
 - OAuth callback routes under `/api/accounts/*/callback`
 
 ### Files
+
 - `GET /api/files`
 - `GET /api/files?path=/`
 - `GET /api/files?recent=1`
@@ -383,11 +398,13 @@ These are the main API surfaces currently present in the project.
 > The project also includes additional file routes for file explorer operations such as details, download, rename, create folder, and per-item delete in the file service / adapter workflow.
 
 ### Uploads
+
 - `POST /api/uploads/initiate`
 - `POST /api/uploads/:uploadId/stream`
 - `WS /ws/uploads?uploadId=...`
 
 ### Settings and allocation
+
 - `GET /api/settings`
 - `PATCH /api/settings`
 - `GET /api/allocation`
@@ -398,6 +415,7 @@ These are the main API surfaces currently present in the project.
 When an upload starts, the backend selects the target account based on the user's allocation configuration. This allows file distribution across providers to be automatic or manually prioritized depending on the user's preference.
 
 Example use cases:
+
 - Distribute uploads across multiple accounts in rotation
 - Prioritize the account with the most free space
 - Enforce a specific manual ordering
@@ -411,7 +429,26 @@ Important data stored locally includes:
 - Encrypted provider credentials / token material
 - User settings
 - Allocation config and rotation state
+- Per-account sync state (delta tokens, last sync timestamps)
 - Auth session data for hosted mode
+
+### Schema migrations
+
+The SQLite schema is created and evolved through versioned migrations in
+`backend/src/config/migrations.js`. Migrations run automatically at startup in
+order, each inside a transaction, and applied versions are recorded in the
+`schema_migrations` table so each runs exactly once on both fresh and existing
+databases. To change the schema, append a new migration with the next version
+number — never edit or reorder a shipped migration.
+
+## ⚖️ Scaling note
+
+OmniCloud currently runs as a **single backend instance**. Real-time upload
+progress is delivered over an in-process WebSocket registry (`websocketHub`), so
+a multi-instance deployment would not reliably deliver progress events to
+clients. Running more than one API replica requires backing the WebSocket hub
+with a shared pub/sub (e.g. Redis) first. The Docker Compose setup ships a single
+`api` service accordingly.
 
 ## 🔒 Security notes
 

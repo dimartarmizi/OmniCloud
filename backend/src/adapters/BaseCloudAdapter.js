@@ -1,5 +1,4 @@
-import { Readable, Transform } from 'stream';
-import { randomUUID } from 'crypto';
+import { Transform } from 'stream';
 
 export class BaseCloudAdapter {
 	constructor(account) {
@@ -12,6 +11,16 @@ export class BaseCloudAdapter {
 			rename: true,
 			delete: true,
 		};
+	}
+
+	/**
+	 * Whether this provider supports incremental change tokens (delta sync). When
+	 * false, the sync service always does a full fetchStructure walk and uses a
+	 * local diff to apply only what changed. When true, the provider implements
+	 * getDeltaChanges() and returns a token to resume from next time.
+	 */
+	supportsDeltaSync() {
+		return false;
 	}
 
 	async fetchStructure() {
@@ -37,40 +46,24 @@ export class BaseCloudAdapter {
 		});
 	}
 
-	async uploadStream({ stream, size, fileName, mimeType, virtualPath, remoteParentId, onProgress }) {
-		const progressStream = this.createProgressStream(onProgress);
-		const passthrough = stream.pipe(progressStream);
-
-		await new Promise((resolve, reject) => {
-			passthrough.on('error', reject);
-			passthrough.on('end', resolve);
-			passthrough.resume();
-		});
-
-		return {
-			remoteFileId: `${this.account.provider}-${randomUUID()}`,
-			remoteParentId: remoteParentId || `${this.account.provider}-${virtualPath}`,
-			size,
-			fileName,
-			mimeType,
-		};
+	async uploadStream() {
+		throw new Error(`Upload is not implemented for provider ${this.account.provider}`);
 	}
 
-	async createFolder({ name, virtualPath, remoteParentId }) {
-		return {
-			remoteFileId: `${this.account.provider}-${randomUUID()}`,
-			remoteParentId: remoteParentId || `${this.account.provider}-${virtualPath}`,
-			fileName: name,
-		};
+	async createFolder() {
+		throw new Error(`Create folder is not implemented for provider ${this.account.provider}`);
 	}
 
-	async getDownloadStream(fileRecord) {
-		const content = `Simulated download for ${fileRecord.file_name} from ${this.account.provider}`;
-		return Readable.from([content]);
+	async getDownloadStream() {
+		throw new Error(`Download is not implemented for provider ${this.account.provider}`);
 	}
 
 	async renameFile() {
 		throw new Error(`Rename is not supported for provider ${this.account.provider}`);
+	}
+
+	async moveFile() {
+		throw new Error(`Move is not supported for provider ${this.account.provider}`);
 	}
 
 	async deleteFile() {
@@ -92,7 +85,20 @@ export class BaseCloudAdapter {
 	}
 
 	async getDeltaChanges() {
-		return [];
+		// Default for providers without delta support: report "changed" so the
+		// caller falls back to a full structure walk. supportsDeltaSync() is false
+		// for these providers, so this is not normally reached.
+		return { hasChanges: true, nextToken: null, expired: false };
+	}
+
+	/**
+	 * Return the current change token without enumerating changes — used right
+	 * after a full structure walk to seed the delta cursor so the next sync can
+	 * be incremental. Default null means "no token available" (provider does not
+	 * support deltas), which keeps the account on full-walk sync.
+	 */
+	async getInitialDeltaToken() {
+		return null;
 	}
 
 	async listSharedWithMe() {
@@ -105,5 +111,15 @@ export class BaseCloudAdapter {
 
 	async setFileStarred() {
 		throw new Error(`Starred state is not supported for provider ${this.account.provider}`);
+	}
+
+	/**
+	 * Best-effort revocation of this account's provider credentials (OAuth token
+	 * revoke, session logout, etc.). Default is a no-op for providers without a
+	 * revoke endpoint (S3 keys, MEGA sessions). Implementations must not throw on
+	 * provider failure — revocation is best-effort during account/teardown.
+	 */
+	async revokeAccess() {
+		return false;
 	}
 }

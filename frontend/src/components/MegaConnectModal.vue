@@ -39,7 +39,7 @@ function submitForm() {
 
 <template>
 	<div class="fixed inset-0 z-50 grid place-items-center bg-slate-950/40 px-4 backdrop-blur-sm">
-		<form class="w-full max-w-md rounded-[28px] border border-[#e0e3e7] bg-white p-6 shadow-[0_24px_70px_rgba(15,23,42,0.24)] dark:border-slate-700 dark:bg-slate-900" @submit.prevent="submitForm">
+		<form class="w-full max-w-md rounded-[14px] border border-[#e0e3e7] bg-white p-6 shadow-[0_24px_70px_rgba(15,23,42,0.24)] dark:border-slate-700 dark:bg-slate-900" @submit.prevent="submitForm">
 			<div class="mb-5">
 				<h2 class="text-xl font-medium">{{ t('mega.connectTitle') }}</h2>
 			</div>
