@@ -6,6 +6,7 @@ export const ALLOCATION_STRATEGIES = [
 	'weighted_round_robin',
 	'least_used',
 	'most_free',
+	'single_account',
 	'manual',
 ];
 

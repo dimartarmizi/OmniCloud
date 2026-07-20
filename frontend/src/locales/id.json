@@ -372,6 +372,8 @@
 			"least_used_desc": "Mengirim tiap unggahan ke akun dengan persentase terpakai paling rendah.",
 			"most_free": "Ruang Kosong Terbanyak",
 			"most_free_desc": "Mengirim tiap unggahan ke akun dengan ruang kosong terbanyak. Cocok untuk file besar.",
+			"single_account": "Unggah Hanya Satu Akun",
+			"single_account_desc": "Mengirim semua unggahan ke satu akun saja.",
 			"manual": "Urutan Kustom",
 			"manual_desc": "Mengisi akun sesuai urutan yang kamu atur di bawah."
 		}

@@ -372,6 +372,8 @@
 			"least_used_desc": "Sends each upload to the account with the lowest used percentage.",
 			"most_free": "Most Free Space",
 			"most_free_desc": "Sends each upload to the account with the most free space. Best for large files.",
+			"single_account": "Upload Only One Account",
+			"single_account_desc": "Sends all uploads to a single account only.",
 			"manual": "Custom Order",
 			"manual_desc": "Fills accounts in the exact order you set below."
 		}

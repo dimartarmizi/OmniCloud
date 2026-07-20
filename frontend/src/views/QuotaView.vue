@@ -44,7 +44,7 @@ const isMegaModalOpen = ref(false);
 const isPCloudModalOpen = ref(false);
 const isS3ModalOpen = ref(false);
 
-const ALLOCATION_STRATEGIES = ['round_robin', 'weighted_round_robin', 'least_used', 'most_free', 'manual'];
+const ALLOCATION_STRATEGIES = ['round_robin', 'weighted_round_robin', 'least_used', 'most_free', 'single_account', 'manual'];
 const activeTab = ref('overview');
 const selectedStrategy = ref('round_robin');
 const allocationOrder = ref([]);

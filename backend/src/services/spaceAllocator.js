@@ -90,6 +90,10 @@ function selectMostFree(accounts) {
 	return [...accounts].sort((a, b) => b.freeSpace - a.freeSpace)[0];
 }
 
+function selectSingleAccount(accounts) {
+	return accounts[0];
+}
+
 function selectManual(accounts, requiredBytes) {
 	return accounts.find((account) => account.freeSpace >= requiredBytes) || accounts[0];
 }
@@ -113,6 +117,9 @@ export function selectBestAccount(userId, requiredBytes = 0) {
 			break;
 		case 'least_used':
 			selected = selectLeastUsed(accounts, required);
+			break;
+		case 'single_account':
+			selected = selectSingleAccount(accounts);
 			break;
 		case 'manual':
 			selected = selectManual(accounts, required);

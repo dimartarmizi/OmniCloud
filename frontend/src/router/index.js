@@ -1,5 +1,4 @@
 import { createRouter, createWebHistory } from 'vue-router';
-import HomeView from '../views/HomeView.vue';
 import MyDriveView from '../views/MyDriveView.vue';
 import RecentView from '../views/RecentView.vue';
 import SharedWithMeView from '../views/SharedWithMeView.vue';
@@ -26,8 +25,7 @@ const router = createRouter({
 		},
 		{
 			path: '/',
-			name: 'home',
-			component: HomeView,
+			redirect: '/my-drive',
 		},
 		{
 			path: '/my-drive',
@@ -63,17 +61,17 @@ router.beforeEach(async (to) => {
 
 	if (!authStore.requiresAuth) {
 		if (to.meta.public) {
-			return { path: '/' };
+			return { path: '/my-drive' };
 		}
 		return true;
 	}
 
 	if (to.meta.public) {
-		return authStore.authenticated ? { path: '/' } : true;
+		return authStore.authenticated ? { path: '/my-drive' } : true;
 	}
 
 	if (!authStore.authenticated) {
-		return { path: '/login', query: to.fullPath === '/' ? {} : { redirect: to.fullPath } };
+		return { path: '/login', query: to.fullPath === '/my-drive' ? {} : { redirect: to.fullPath } };
 	}
 
 	return true;

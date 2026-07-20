@@ -421,6 +421,17 @@ Important data stored locally includes:
 - `OMNICLOUD_SECRET_HALF` is used as part of local encryption key material
 - For `APP_MODE=hosted`, use a strong `AUTH_SECRET` and the correct frontend origin
 
+## Update 
+- Added omnicloud-launcher.ps1 for simplified build launcher to exe with ps2exe
+- run this command in your powershell app
+```bash
+Install-Module -Name ps2exe -Scope CurrentUser -Force
+```
+- run this command in your powershell app
+```bash
+Invoke-ps2exe -InputFile ".\omnicloud-launcher.ps1" -OutputFile ".\omnicloud-launcher.exe" -NoConsole -IconFile ".\icon.ico"
+```
+
 ## 📄 License
 
 This project is licensed under the [MIT License](LICENSE).

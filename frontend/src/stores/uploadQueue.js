@@ -300,14 +300,21 @@ export const useUploadQueueStore = defineStore('uploadQueue', {
 						}
 					};
 
-					socket.onerror = () => {
-						this.updateUpload(queueItem.id, {
-							status: 'failed',
-							error: 'WebSocket connection failed',
-						});
+					socket.onerror = (event) => {
+						console.warn('Upload websocket error', event);
 					};
 
 					await api.uploadFile(data.upload_id, file, { signal: queueItem.abortController.signal });
+
+					const currentUpload = this.uploads.find((item) => item.id === queueItem.id);
+					if (currentUpload && currentUpload.status === 'uploading') {
+						this.updateUpload(queueItem.id, {
+							progress_percentage: 100,
+							status: 'completed',
+						});
+						socket.close();
+						onCompleted?.();
+					}
 				} catch (error) {
 					if (isAbortError(error) || queueItem.abortController.signal.aborted) {
 						this.updateUpload(queueItem.id, {
