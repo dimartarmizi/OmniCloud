@@ -1,17 +1,13 @@
 import dotenv from 'dotenv';
-import os from 'os';
 import crypto from 'crypto';
 
 dotenv.config();
 
-const machineFingerprint = crypto
-	.createHash('sha256')
-	.update(`${os.hostname()}|${os.platform()}|${os.arch()}`)
-	.digest('hex');
-
+// Encryption key derived purely from the secret env var — NOT from machine identity.
+// This ensures credentials remain readable across server restarts, re-deploys,
+// and container migrations (e.g. Render moving to a different host).
 const envHalf = process.env.OMNICLOUD_SECRET_HALF || 'omnicloud-dev-secret-half';
-const derivedKeyMaterial = `${envHalf}:${machineFingerprint}`;
-const encryptionKey = crypto.createHash('sha256').update(derivedKeyMaterial).digest();
+const encryptionKey = crypto.createHash('sha256').update(envHalf).digest();
 
 export const env = {
 	port: Number(process.env.PORT || 8787),

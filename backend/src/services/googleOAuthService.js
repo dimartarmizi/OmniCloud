@@ -3,8 +3,7 @@ import { google } from 'googleapis';
 import { env } from '../config/env.js';
 import { upsertCloudAccount } from './accountService.js';
 import { syncAccount } from './syncService.js';
-
-const oauthStates = new Map();
+import { saveOAuthState, consumeOAuthState } from './oauthStateStore.js';
 
 
 function readGoogleCredentials() {
@@ -50,7 +49,7 @@ export function getGoogleIntegrationStatus() {
 export function createGoogleAuthorizationRequest(userId) {
 	const oauthClient = createOAuthClient();
 	const state = randomUUID();
-	oauthStates.set(state, { userId, createdAt: Date.now() });
+	saveOAuthState(state, 'google_drive', userId);
 
 	const authorizationUrl = oauthClient.generateAuthUrl({
 		access_type: 'offline',
@@ -77,12 +76,10 @@ export async function completeGoogleAccountLink({ code, state }) {
 		throw new Error('Missing Google OAuth code or state');
 	}
 
-	const authState = oauthStates.get(state);
+	const authState = consumeOAuthState(state, 'google_drive');
 	if (!authState) {
 		throw new Error('Invalid or expired Google OAuth state');
 	}
-
-	oauthStates.delete(state);
 
 	const oauthClient = createOAuthClient();
 	const { tokens } = await oauthClient.getToken(code);
