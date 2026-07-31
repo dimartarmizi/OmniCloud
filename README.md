@@ -311,6 +311,55 @@ SQLite data is persisted in the Docker volume `omnicloud_api_data`. To remove co
 docker compose down -v
 ```
 
+## ☁️ Deployment
+
+The app is deployed as two separate services:
+
+| Part | Provider | URL |
+| --- | --- | --- |
+| Backend API | Render | `https://omnicloud-api.onrender.com` |
+| Frontend | Netlify | `https://omnicloud-625.netlify.app` |
+
+### Backend (Render)
+
+The backend is a Node web service created via the Render CLI:
+
+- Root directory: `backend`
+- Build command: `npm install --omit=dev`
+- Start command: `npm start`
+- Health check: `GET /api/health`
+- Auto-deploys on push to `main` when files under `backend/` change
+
+Environment variables are managed in the Render dashboard (service `omnicloud-api`):
+
+- `APP_MODE=local` (single-user) or `hosted` (multi-user)
+- `CORS_ORIGIN` / `FRONTEND_URL` → the Netlify site URL
+- `OMNICLOUD_SECRET_HALF` → credential encryption key
+- Provider OAuth credentials, with redirect URIs pointing at the Render URL
+
+> **Persistence note:** Render free-tier instances have an ephemeral filesystem, so the SQLite database is recreated on every deploy/restart. On a paid plan, attach a persistent disk and set `DATABASE_PATH=/var/data/omnicloud.db` to keep data across deploys.
+
+### Frontend (Netlify)
+
+Build locally with the backend URL, then deploy the `dist` folder:
+
+```bash
+VITE_API_BASE_URL=https://omnicloud-api.onrender.com/api
+VITE_WS_BASE_URL=wss://omnicloud-api.onrender.com
+npm --prefix frontend run build
+netlify deploy --prod --dir=frontend/dist --filter frontend
+```
+
+The same values are stored as Netlify site env vars (`VITE_API_BASE_URL`, `VITE_WS_BASE_URL`) for CI-based builds.
+
+### Provider OAuth in production
+
+To let OAuth providers (Google Drive, OneDrive, Dropbox, Yandex) redirect back to the deployed backend, register the production callback URL with the provider console. For Google Drive, add this URI to the OAuth client in the [Google Cloud Console](https://console.cloud.google.com/):
+
+```
+https://omnicloud-api.onrender.com/api/accounts/google/callback
+```
+
 ## 📌 Available scripts
 
 ### Root scripts
