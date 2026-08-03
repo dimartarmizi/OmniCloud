@@ -17,7 +17,7 @@ export function useTrackedFileActions({ uploadQueueStore, api }) {
 			{
 				type: 'rename',
 				name: nextName,
-				fromName: file.file_name,
+				fromName: file.display_name || file.file_name,
 				toName: nextName,
 				targetKind: file.is_folder ? 'folder' : 'file',
 			},
@@ -31,7 +31,7 @@ export function useTrackedFileActions({ uploadQueueStore, api }) {
 			return uploadQueueStore.trackServerOperation(
 				{
 					type: 'delete',
-					name: files[0].file_name,
+					name: files[0].display_name || files[0].file_name,
 					targetKind: files[0].is_folder ? 'folder' : 'file',
 				},
 				() => api.deleteFile(files[0].id),

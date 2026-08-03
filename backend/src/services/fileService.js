@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import { db } from '../config/database.js';
 import { resolveMimeType } from '../utils/mime.js';
+import { getHiddenFilesForBatch, clearHiddenForAccount } from './hiddenFileService.js';
 
 function normalizePath(input = '/') {
 	if (!input || input === '/') return '/';
@@ -9,16 +10,36 @@ function normalizePath(input = '/') {
 }
 
 function buildDisplayNames(rows) {
-	return rows.map((row) => ({
-		...row,
-		createdTime: row.remote_created_time || null,
-		modifiedTime: row.remote_modified_time || null,
-		capabilities: {
-			starred: row.provider === 'google_drive',
-			rename: true,
-			delete: true,
-		},
-	}));
+	if (!rows.length) return [];
+
+	const hidden = getHiddenFilesForBatch(
+		rows.map((row) => ({ cloud_account_id: row.cloud_account_id, remote_file_id: row.remote_file_id })),
+	);
+	const byKey = new Map(hidden.map((h) => [`${h.cloud_account_id}:${h.remote_file_id}`, h]));
+
+	return rows.map((row) => {
+		const base = {
+			...row,
+			createdTime: row.remote_created_time || null,
+			modifiedTime: row.remote_modified_time || null,
+			capabilities: {
+				starred: row.provider === 'google_drive',
+				rename: true,
+				delete: true,
+			},
+		};
+
+		const enc = byKey.get(`${row.cloud_account_id}:${row.remote_file_id}`);
+		if (enc) {
+			// Hidden files are flagged (so download/preview routes know to decrypt)
+			// but their real identity is encrypted in enc_meta — only the vault path
+			// reveals it. Starring is disabled: hidden files never appear in Starred.
+			base.is_hidden = true;
+			base.capabilities = { starred: false, rename: true, delete: true };
+		}
+
+		return base;
+	});
 }
 
 export function listFilesByPath(userId, virtualPath = '/') {
@@ -32,6 +53,11 @@ export function listFilesByPath(userId, virtualPath = '/') {
 			WHERE fm.user_id = ?
 				AND fm.virtual_path = ?
 				AND ca.status = 'active'
+				AND NOT EXISTS (
+					SELECT 1 FROM file_encryption fe
+					WHERE fe.cloud_account_id = fm.cloud_account_id
+						AND fe.remote_file_id = fm.remote_file_id
+				)
       ORDER BY fm.is_folder DESC, fm.file_name COLLATE NOCASE ASC
     `)
 		.all(userId, normalized);
@@ -53,6 +79,11 @@ export function searchFiles(userId, term = '', limit = 50) {
 			WHERE fm.user_id = ?
 				AND ca.status = 'active'
 				AND fm.file_name LIKE ? COLLATE NOCASE
+				AND NOT EXISTS (
+					SELECT 1 FROM file_encryption fe
+					WHERE fe.cloud_account_id = fm.cloud_account_id
+						AND fe.remote_file_id = fm.remote_file_id
+				)
       ORDER BY
 				CASE WHEN fm.file_name LIKE ? COLLATE NOCASE THEN 0 ELSE 1 END,
 				fm.is_folder DESC,
@@ -123,7 +154,17 @@ export function getFileByRemoteId(userId, cloudAccountId, remoteFileId) {
 }
 
 export function listAllFiles(userId) {
-	return db.prepare('SELECT * FROM file_metadata WHERE user_id = ?').all(userId);
+	return db
+		.prepare(`
+			SELECT fm.* FROM file_metadata fm
+			WHERE fm.user_id = ?
+				AND NOT EXISTS (
+					SELECT 1 FROM file_encryption fe
+					WHERE fe.cloud_account_id = fm.cloud_account_id
+						AND fe.remote_file_id = fm.remote_file_id
+				)
+		`)
+		.all(userId);
 }
 
 export function listStarredFiles(userId) {
@@ -133,6 +174,11 @@ export function listStarredFiles(userId) {
 			FROM file_metadata fm
 			INNER JOIN cloud_accounts ca ON ca.id = fm.cloud_account_id
 			WHERE fm.user_id = ? AND COALESCE(fm.is_starred, 0) = 1 AND ca.status = 'active'
+				AND NOT EXISTS (
+					SELECT 1 FROM file_encryption fe
+					WHERE fe.cloud_account_id = fm.cloud_account_id
+						AND fe.remote_file_id = fm.remote_file_id
+				)
 			ORDER BY COALESCE(fm.remote_modified_time, fm.remote_created_time) DESC,
 				fm.updated_at DESC,
 				fm.file_name COLLATE NOCASE ASC
@@ -151,6 +197,11 @@ export function listRecentFiles(userId) {
 			WHERE fm.user_id = ?
 				AND fm.is_folder = 0
 				AND ca.status = 'active'
+				AND NOT EXISTS (
+					SELECT 1 FROM file_encryption fe
+					WHERE fe.cloud_account_id = fm.cloud_account_id
+						AND fe.remote_file_id = fm.remote_file_id
+				)
 			ORDER BY COALESCE(fm.remote_modified_time, fm.remote_created_time) DESC,
 				fm.updated_at DESC,
 				fm.file_name COLLATE NOCASE ASC
@@ -158,6 +209,23 @@ export function listRecentFiles(userId) {
 		.all(userId);
 
 	return buildDisplayNames(rows);
+}
+
+// Raw hidden rows (obfuscated name/size) joined to file_encryption. Real
+// identity is inside enc_meta — decrypt it in the route with the vault KEK.
+export function listHiddenFiles(userId) {
+	return db
+		.prepare(`
+			SELECT fm.*, ca.provider, ca.email, fe.wrapped_key, fe.enc_meta
+			FROM file_metadata fm
+			INNER JOIN cloud_accounts ca ON ca.id = fm.cloud_account_id
+			INNER JOIN file_encryption fe
+				ON fe.cloud_account_id = fm.cloud_account_id AND fe.remote_file_id = fm.remote_file_id
+			WHERE fm.user_id = ? AND fm.is_folder = 0 AND ca.status = 'active'
+			ORDER BY COALESCE(fm.remote_modified_time, fm.remote_created_time) DESC,
+				fm.updated_at DESC
+		`)
+		.all(userId);
 }
 
 export function updateFileStarredByRemoteId(userId, cloudAccountId, remoteFileId, isStarred) {
@@ -218,6 +286,7 @@ export function replaceFilesForAccount(userId, cloudAccountId, records) {
 
 export function clearFilesForAccount(userId, cloudAccountId) {
 	db.prepare('DELETE FROM file_metadata WHERE user_id = ? AND cloud_account_id = ?').run(userId, cloudAccountId);
+	clearHiddenForAccount(cloudAccountId);
 }
 
 export function upsertFileMetadata(record) {
@@ -255,10 +324,15 @@ export function upsertFileMetadata(record) {
 export function listDirectoryTree(userId) {
 	return db
 		.prepare(`
-      SELECT id, virtual_path, file_name, is_folder, cloud_account_id
-      FROM file_metadata
-      WHERE user_id = ?
-      ORDER BY virtual_path, is_folder DESC, file_name
+      SELECT fm.id, fm.virtual_path, fm.file_name, fm.is_folder, fm.cloud_account_id
+      FROM file_metadata fm
+      WHERE fm.user_id = ?
+        AND NOT EXISTS (
+					SELECT 1 FROM file_encryption fe
+					WHERE fe.cloud_account_id = fm.cloud_account_id
+						AND fe.remote_file_id = fm.remote_file_id
+				)
+      ORDER BY fm.virtual_path, fm.is_folder DESC, fm.file_name
     `)
 		.all(userId);
 }

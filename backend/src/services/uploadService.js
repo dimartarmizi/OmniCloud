@@ -1,5 +1,6 @@
 import Busboy from 'busboy';
 import { PassThrough } from 'stream';
+import { randomUUID } from 'crypto';
 import { createAdapter } from './adapterRegistry.js';
 import { getAccountById, markAccountStatus, updateAccountUsage } from './accountService.js';
 import { createFileMetadata, getFileByRemoteId } from './fileService.js';
@@ -7,6 +8,9 @@ import { emitUploadEvent } from './websocketHub.js';
 import { getUploadSessionForUser, updateUploadSession, removeUploadSession } from './uploadSessionService.js';
 import { syncAccount } from './syncService.js';
 import { isAuthError } from '../utils/providerErrors.js';
+import { createEncryptStream, generateDataKey, wrapDataKey } from '../utils/fileEncryption.js';
+import { kekWrap, kekMeta, encryptMeta } from '../utils/vaultCrypto.js';
+import { storeHiddenFile } from './hiddenFileService.js';
 
 async function pipeUpload({ req, session }) {
 	return new Promise((resolve, reject) => {
@@ -23,8 +27,22 @@ async function pipeUpload({ req, session }) {
 
 		busboy.on('file', async (_field, file, info) => {
 			fileReceived = true;
+
+			// Hidden uploads encrypt the stream once, upstream of the shared
+			// PassThrough, so fallback-retry semantics stay byte-for-byte the same
+			// as today (never rebuild the encrypt stream or DEK per attempt).
+			const obfuscatedName = session.is_hidden ? randomUUID() : null;
+			const dataKey = session.is_hidden ? generateDataKey() : null;
+			// DEK is wrapped under the vault KEK's wrap sub-key (domain-separated).
+			const wrappedKey = session.is_hidden ? wrapDataKey(dataKey, kekWrap(session.vault_kek)) : null;
+			const effectiveSize = session.effective_size ?? session.size;
+
 			const streamBuffer = new PassThrough();
-			file.pipe(streamBuffer);
+			if (session.is_hidden) {
+				file.pipe(createEncryptStream(dataKey, session.size)).pipe(streamBuffer);
+			} else {
+				file.pipe(streamBuffer);
+			}
 
 			let activeAccountId = session.cloud_account_id;
 			const tried = new Set();
@@ -39,13 +57,13 @@ async function pipeUpload({ req, session }) {
 
 				const result = await adapter.uploadStream({
 					stream: streamBuffer,
-					size: session.size,
-					fileName: info.filename,
-					mimeType: info.mimeType,
+					size: effectiveSize,
+					fileName: session.is_hidden ? obfuscatedName : info.filename,
+					mimeType: session.is_hidden ? 'application/octet-stream' : info.mimeType,
 					virtualPath: session.virtual_path,
 					remoteParentId: session.remote_parent_id,
 					onProgress: (bytes) => {
-						const percent = Math.min(100, Math.round((bytes / session.size) * 100));
+						const percent = Math.min(100, Math.round((bytes / effectiveSize) * 100));
 						emitUploadEvent(session.id, {
 							type: 'upload:progress',
 							uploadId: session.id,
@@ -77,16 +95,38 @@ async function pipeUpload({ req, session }) {
 					({ result: uploadResponse, account } = await attemptUpload(activeAccountId));
 				}
 
-				const usedSpace = Number(account.used_space) + Number(session.size);
+				const usedSpace = Number(account.used_space) + Number(effectiveSize);
 				updateAccountUsage(session.user_id, account.id, usedSpace);
+
+				// Persist the wrapped key BEFORE sync: if the provider snapshot lags
+				// and drops the file_metadata row, the encryption row (keyed by
+				// cloud_account_id + remote_file_id) survives and re-decorates the
+				// file on the next sync that lists it.
+				if (session.is_hidden) {
+					// Real identity (name/size/type) is encrypted under the vault
+					// meta sub-key — never written to plaintext columns.
+					storeHiddenFile({
+						cloud_account_id: account.id,
+						remote_file_id: uploadResponse.remoteFileId,
+						wrapped_key: wrappedKey,
+						enc_meta: encryptMeta(
+							{
+								real_name: info.filename,
+								plaintext_size: session.size,
+								mime_type: info.mimeType,
+							},
+							kekMeta(session.vault_kek),
+						),
+					});
+				}
 
 				let metadata = createFileMetadata({
 					user_id: session.user_id,
 					virtual_path: session.virtual_path,
-					file_name: info.filename,
+					file_name: session.is_hidden ? obfuscatedName : info.filename,
 					is_folder: false,
-					size: session.size,
-					mime_type: info.mimeType,
+					size: effectiveSize,
+					mime_type: session.is_hidden ? 'application/octet-stream' : info.mimeType,
 					cloud_account_id: account.id,
 					remote_file_id: uploadResponse.remoteFileId,
 					remote_parent_id: uploadResponse.remoteParentId,

@@ -217,4 +217,31 @@ export const api = {
 			body: JSON.stringify(payload),
 		});
 	},
+	getVaultStatus() {
+		return request('/vault/status');
+	},
+	setupVault(pin) {
+		return request('/vault/setup', {
+			method: 'POST',
+			body: JSON.stringify({ pin }),
+		});
+	},
+	unlockVault(pin) {
+		return request('/vault/unlock', {
+			method: 'POST',
+			body: JSON.stringify({ pin }),
+		});
+	},
+	resetVaultPin(words, new_pin) {
+		return request('/vault/reset-pin', {
+			method: 'POST',
+			body: JSON.stringify({ words, new_pin }),
+		});
+	},
+	lockVault() {
+		return request('/vault/lock', { method: 'POST' });
+	},
+	listHiddenFiles() {
+		return request('/files?hidden=1');
+	},
 };

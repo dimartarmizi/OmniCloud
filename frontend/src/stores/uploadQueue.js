@@ -246,14 +246,15 @@ export const useUploadQueueStore = defineStore('uploadQueue', {
 			}
 			}
 		},
-		async uploadFiles(files, currentPath, onCompleted) {
+		async uploadFiles(files, currentPath, onCompleted, options = {}) {
 			const entries = Array.from(files || []);
 			const batchId = createBatchId();
 			const batchTotal = entries.length;
+			const isHidden = Boolean(options.isHidden);
 
 			for (const rawEntry of entries) {
 				const { file, relativePath } = normalizeUploadEntry(rawEntry);
-				const queueItem = this.registerUpload(file, currentPath, relativePath, { batchId, batchTotal });
+				const queueItem = this.registerUpload(file, currentPath, relativePath, { batchId, batchTotal, is_hidden: isHidden });
 				const targetPath = buildVirtualPath(currentPath, relativePath);
 
 				try {
@@ -262,6 +263,7 @@ export const useUploadQueueStore = defineStore('uploadQueue', {
 						size: file.size,
 						mime_type: file.type || 'application/octet-stream',
 						virtual_path: targetPath,
+						is_hidden: isHidden,
 					}, { signal: queueItem.abortController.signal });
 
 					const socket = api.createUploadSocket(data.upload_id);

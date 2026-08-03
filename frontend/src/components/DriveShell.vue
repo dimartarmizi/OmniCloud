@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useI18n } from 'vue-i18n';
-import { IconCloudDataConnection, IconChevronRight, IconHelp, IconHome, IconLayoutGrid, IconMenu2, IconMoon, IconPlus, IconSearch, IconSettings, IconSun, IconStar, IconTrash, IconUsers, IconX, IconClockHour4, IconCloud, IconFolder, IconCloudFilled, IconClockHour4Filled, IconFolderFilled, IconHomeFilled, IconStarFilled, IconUserFilled, IconLanguage, IconLogout, IconBell } from '@tabler/icons-vue';
+import { IconCloudDataConnection, IconChevronRight, IconHelp, IconHome, IconLayoutGrid, IconMenu2, IconMoon, IconPlus, IconSearch, IconSettings, IconSun, IconStar, IconTrash, IconUsers, IconX, IconClockHour4, IconCloud, IconFolder, IconCloudFilled, IconClockHour4Filled, IconFolderFilled, IconHomeFilled, IconStarFilled, IconUserFilled, IconLanguage, IconLogout, IconBell, IconLock, IconLockFilled } from '@tabler/icons-vue';
 import { useRouter } from 'vue-router';
 import logoUrl from '../assets/logo.webp';
 import { useAccountManagementStore } from '../stores/accountManagement';
@@ -269,6 +269,7 @@ const navItems = computed(() => [
 	{ id: 'home', label: t('nav.home'), icon: IconHome, activeIcon: IconHomeFilled, to: '/' },
 	{ id: 'drive', label: t('nav.myDrive'), icon: IconFolder, activeIcon: IconFolderFilled, to: '/my-drive' },
 	{ id: 'shared', label: t('nav.shared'), icon: IconUsers, activeIcon: IconUserFilled, to: '/shared-with-me' },
+	{ id: 'hidden', label: t('nav.hidden'), icon: IconLock, activeIcon: IconLockFilled, to: '/hidden' },
 	{ id: 'recent', label: t('nav.recent'), icon: IconClockHour4, activeIcon: IconClockHour4Filled, to: '/recent' },
 	{ id: 'starred', label: t('nav.starred'), icon: IconStar, activeIcon: IconStarFilled, to: '/starred' },
 	{ id: 'storage', label: t('nav.storage'), icon: IconCloud, activeIcon: IconCloudFilled, to: '/quota' },

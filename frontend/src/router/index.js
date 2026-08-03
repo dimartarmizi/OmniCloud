@@ -3,6 +3,7 @@ import HomeView from '../views/HomeView.vue';
 import MyDriveView from '../views/MyDriveView.vue';
 import RecentView from '../views/RecentView.vue';
 import SharedWithMeView from '../views/SharedWithMeView.vue';
+import HiddenView from '../views/HiddenView.vue';
 import StarredView from '../views/StarredView.vue';
 import QuotaView from '../views/QuotaView.vue';
 import LoginView from '../views/auth/LoginView.vue';
@@ -38,6 +39,11 @@ const router = createRouter({
 			path: '/shared-with-me',
 			name: 'shared-with-me',
 			component: SharedWithMeView,
+		},
+		{
+			path: '/hidden',
+			name: 'hidden',
+			component: HiddenView,
 		},
 		{
 			path: '/recent',

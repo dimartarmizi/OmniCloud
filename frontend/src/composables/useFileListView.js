@@ -96,7 +96,7 @@ export function useFileListView({
 		return source.filter((file) => {
 			const query = searchTerm.value.trim().toLowerCase();
 			if (query && !sourceFiles) {
-				const matchesQuery = [file.file_name, file.email, file.provider, file.virtual_path]
+				const matchesQuery = [file.display_name, file.file_name, file.email, file.provider, file.virtual_path]
 					.filter(Boolean)
 					.some((value) => String(value).toLowerCase().includes(query));
 				if (!matchesQuery) return false;
@@ -116,7 +116,7 @@ export function useFileListView({
 				const left = new Date(a.modifiedTime || a.createdTime || 0).getTime();
 				const right = new Date(b.modifiedTime || b.createdTime || 0).getTime();
 				if (left !== right) return right - left;
-				return (a.file_name || '').localeCompare(b.file_name || '', 'id');
+				return (a.display_name || a.file_name || '').localeCompare(b.display_name || b.file_name || '', 'id');
 			});
 		}
 		const direction = sortDirection.value === 'asc' ? 1 : -1;

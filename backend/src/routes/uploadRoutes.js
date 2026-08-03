@@ -3,26 +3,44 @@ import { requireAppUser } from '../middleware/authMiddleware.js';
 import { selectBestAccount } from '../services/spaceAllocator.js';
 import { createUploadSession } from '../services/uploadSessionService.js';
 import { handleUpload } from '../services/uploadService.js';
+import * as vaultSessionService from '../services/vaultSessionService.js';
+import { ciphertextSize } from '../utils/fileEncryption.js';
 
 const router = Router();
 
 router.use(requireAppUser);
 
 router.post('/uploads/initiate', (req, res) => {
-	const { file_name, size, mime_type, virtual_path = '/', remote_parent_id = null } = req.body;
+	const { file_name, size, mime_type, virtual_path = '/', remote_parent_id = null, is_hidden = false } = req.body;
 
 	if (!file_name || size === undefined || size === null) {
 		return res.status(400).json({ error: 'file_name and size are required' });
 	}
 
-	const allocation = selectBestAccount(req.user.id, Number(size));
+	const isHidden = is_hidden === true || is_hidden === 'true' || is_hidden === 1 || is_hidden === '1';
+	const plaintextSize = Number(size);
+	// Allocate space by the bytes the provider will actually store (ciphertext).
+	const effectiveSize = isHidden ? ciphertextSize(plaintextSize) : plaintextSize;
+
+	// Hidden uploads require an unlocked vault — the KEK wraps the file DEK.
+	// Stash it on the session so a long stream isn't interrupted by the vault
+	// TTL expiring mid-upload (it was authorized at start).
+	const vaultKek = isHidden ? vaultSessionService.getKek(req.user.id) : null;
+	if (isHidden && !vaultKek) {
+		return res.status(403).json({ error: 'VAULT_LOCKED' });
+	}
+
+	const allocation = selectBestAccount(req.user.id, effectiveSize);
 	const session = createUploadSession({
 		user_id: req.user.id,
 		file_name,
-		size: Number(size),
+		size: plaintextSize,
+		effective_size: effectiveSize,
 		mime_type,
 		virtual_path,
 		remote_parent_id,
+		is_hidden: isHidden,
+		vault_kek: vaultKek,
 		cloud_account_id: allocation.selected.id,
 		fallback_chain: allocation.fallbackChain.map((account) => account.id),
 	});

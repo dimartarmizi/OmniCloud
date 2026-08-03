@@ -2,8 +2,7 @@ import { randomUUID } from 'crypto';
 import { env } from '../config/env.js';
 import { upsertCloudAccount } from './accountService.js';
 import { syncAccount } from './syncService.js';
-
-const oauthStates = new Map();
+import { saveOAuthState, consumeOAuthState } from './oauthStateStore.js';
 const DROPBOX_SCOPES = [
 	'account_info.read',
 	'files.metadata.read',
@@ -89,7 +88,7 @@ export function createDropboxAuthorizationRequest(userId) {
 	assertDropboxConfigured();
 
 	const state = randomUUID();
-	oauthStates.set(state, { userId, createdAt: Date.now() });
+	saveOAuthState(state, 'dropbox', userId);
 
 	const authorizationUrl = new URL('https://www.dropbox.com/oauth2/authorize');
 	authorizationUrl.searchParams.set('client_id', env.dropboxClientId);
@@ -113,12 +112,10 @@ export async function completeDropboxAccountLink({ code, state }) {
 		throw new Error('Missing Dropbox OAuth code or state');
 	}
 
-	const authState = oauthStates.get(state);
+	const authState = consumeOAuthState(state, 'dropbox');
 	if (!authState) {
 		throw new Error('Invalid or expired Dropbox OAuth state');
 	}
-
-	oauthStates.delete(state);
 
 	const tokens = await exchangeCodeForTokens(code);
 	const profile = await fetchDropboxProfile(tokens.access_token);
