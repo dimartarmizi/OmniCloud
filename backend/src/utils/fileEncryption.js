@@ -35,22 +35,23 @@ export function generateDataKey() {
 	return crypto.randomBytes(32);
 }
 
-// Wrap the per-file Data Encryption Key with the server master key (env.encryptionKey).
+// Wrap the per-file Data Encryption Key under a KEK. Defaults to the server
+// master key (env.encryptionKey) for legacy usage; the vault passes kekWrap(KEK).
 // Layout matches crypto.js: base64(iv[12] || authTag[16] || ciphertext).
-export function wrapDataKey(dataKey) {
+export function wrapDataKey(dataKey, kek = env.encryptionKey) {
 	const iv = crypto.randomBytes(12);
-	const cipher = crypto.createCipheriv('aes-256-gcm', env.encryptionKey, iv);
+	const cipher = crypto.createCipheriv('aes-256-gcm', kek, iv);
 	const encrypted = Buffer.concat([cipher.update(dataKey), cipher.final()]);
 	const authTag = cipher.getAuthTag();
 	return Buffer.concat([iv, authTag, encrypted]).toString('base64');
 }
 
-export function unwrapDataKey(value) {
+export function unwrapDataKey(value, kek = env.encryptionKey) {
 	const raw = Buffer.from(value, 'base64');
 	const iv = raw.subarray(0, 12);
 	const authTag = raw.subarray(12, 28);
 	const encrypted = raw.subarray(28);
-	const decipher = crypto.createDecipheriv('aes-256-gcm', env.encryptionKey, iv);
+	const decipher = crypto.createDecipheriv('aes-256-gcm', kek, iv);
 	decipher.setAuthTag(authTag);
 	return Buffer.concat([decipher.update(encrypted), decipher.final()]);
 }

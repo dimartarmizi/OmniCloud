@@ -3,6 +3,7 @@ import { requireAppUser } from '../middleware/authMiddleware.js';
 import { selectBestAccount } from '../services/spaceAllocator.js';
 import { createUploadSession } from '../services/uploadSessionService.js';
 import { handleUpload } from '../services/uploadService.js';
+import * as vaultSessionService from '../services/vaultSessionService.js';
 import { ciphertextSize } from '../utils/fileEncryption.js';
 
 const router = Router();
@@ -21,6 +22,14 @@ router.post('/uploads/initiate', (req, res) => {
 	// Allocate space by the bytes the provider will actually store (ciphertext).
 	const effectiveSize = isHidden ? ciphertextSize(plaintextSize) : plaintextSize;
 
+	// Hidden uploads require an unlocked vault — the KEK wraps the file DEK.
+	// Stash it on the session so a long stream isn't interrupted by the vault
+	// TTL expiring mid-upload (it was authorized at start).
+	const vaultKek = isHidden ? vaultSessionService.getKek(req.user.id) : null;
+	if (isHidden && !vaultKek) {
+		return res.status(403).json({ error: 'VAULT_LOCKED' });
+	}
+
 	const allocation = selectBestAccount(req.user.id, effectiveSize);
 	const session = createUploadSession({
 		user_id: req.user.id,
@@ -31,6 +40,7 @@ router.post('/uploads/initiate', (req, res) => {
 		virtual_path,
 		remote_parent_id,
 		is_hidden: isHidden,
+		vault_kek: vaultKek,
 		cloud_account_id: allocation.selected.id,
 		fallback_chain: allocation.fallbackChain.map((account) => account.id),
 	});

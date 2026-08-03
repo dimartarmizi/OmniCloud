@@ -38,7 +38,6 @@ const folderInputRef = ref(null);
 const lastObservedSyncAt = ref('');
 const highlightedFileId = ref(null);
 const highlightTimeout = ref(null);
-const isHiddenUpload = ref(false);
 
 const view = useFileListView({
 	sourceFiles: computed(() => fileTreeStore.filteredFiles),
@@ -212,7 +211,7 @@ useAutoRefresh(checkSyncStatus, { intervalMs: 20000, immediate: false });
 async function handleUploads(entries) {
 	if (!entries.length) return;
 	try {
-		await uploadQueueStore.uploadFiles(entries, currentPath.value, refreshCurrentFolder, { isHidden: isHiddenUpload.value });
+		await uploadQueueStore.uploadFiles(entries, currentPath.value, refreshCurrentFolder);
 		await refreshCurrentFolder();
 	} catch {
 	}
@@ -360,13 +359,7 @@ onBeforeUnmount(() => {
 						<IconChevronRight v-if="index < breadcrumbs.length - 1" :size="18" :stroke="2" class="mx-1 text-[#5f6368] dark:text-slate-400" />
 					</template>
 				</nav>
-				<div class="flex flex-wrap items-center gap-4">
-					<label class="flex cursor-pointer items-center gap-1.5 text-sm text-[#5f6368] dark:text-slate-400" :title="t('drive.hiddenUploadDesc')">
-						<input v-model="isHiddenUpload" type="checkbox" class="size-4 accent-[#1a73e8]" />
-						<span>{{ t('drive.hiddenUpload') }}</span>
-					</label>
-					<FileListViewModeToggle v-model="isGridView" />
-				</div>
+				<FileListViewModeToggle v-model="isGridView" />
 			</div>
 
 			<div class="mb-3 flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center">

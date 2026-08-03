@@ -84,12 +84,31 @@ db.exec(`
     plaintext_size INTEGER NOT NULL DEFAULT 0,
     mime_type TEXT,
     wrapped_key TEXT NOT NULL,
+    enc_meta TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (cloud_account_id, remote_file_id),
     FOREIGN KEY(cloud_account_id) REFERENCES cloud_accounts(id) ON DELETE CASCADE
   );
+
+  CREATE TABLE IF NOT EXISTS vault (
+    user_id TEXT PRIMARY KEY,
+    salt_pin TEXT NOT NULL,
+    kek_wrapped_by_pin TEXT NOT NULL,
+    salt_seed TEXT NOT NULL,
+    kek_wrapped_by_seed TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
 `);
+
+// Migration: add enc_meta to file_encryption for databases created before the
+// vault feature (the table's plaintext real_name/plaintext_size/mime_type
+// columns stay but become unused — real metadata now lives encrypted in enc_meta).
+if (!db.pragma('table_info(file_encryption)').some((column) => column.name === 'enc_meta')) {
+	db.exec('ALTER TABLE file_encryption ADD COLUMN enc_meta TEXT');
+}
 
 db.prepare(`
   INSERT OR IGNORE INTO users (id, email, password_hash, is_local)

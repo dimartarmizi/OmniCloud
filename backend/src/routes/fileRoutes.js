@@ -1,12 +1,14 @@
 import { Router } from 'express';
-import { listFilesByPath, getFileById, getFileByRemoteId, listRecentFiles, listStarredFiles, searchFiles, setFileStarred, updateFileStarredByRemoteId } from '../services/fileService.js';
+import { listFilesByPath, getFileById, getFileByRemoteId, listRecentFiles, listStarredFiles, searchFiles, setFileStarred, updateFileStarredByRemoteId, listHiddenFiles } from '../services/fileService.js';
 import { getAccountById, getActiveAccounts } from '../services/accountService.js';
 import { createAdapter } from '../services/adapterRegistry.js';
 import { selectBestAccount } from '../services/spaceAllocator.js';
 import { syncAccount } from '../services/syncService.js';
 import { requireAppUser } from '../middleware/authMiddleware.js';
-import { getHiddenFile, updateHiddenFileName, deleteHiddenFile } from '../services/hiddenFileService.js';
+import { getHiddenFile, updateHiddenFileMeta, deleteHiddenFile } from '../services/hiddenFileService.js';
 import { unwrapDataKey, createDecryptStream } from '../utils/fileEncryption.js';
+import { decryptMeta, encryptMeta, kekWrap, kekMeta } from '../utils/vaultCrypto.js';
+import * as vaultSessionService from '../services/vaultSessionService.js';
 
 const router = Router();
 
@@ -142,6 +144,34 @@ function ensureFileContext(context, res) {
 	return true;
 }
 
+// Hidden routes resolve the file context first (404 for missing), THEN require
+// the vault (403 VAULT_LOCKED). Returns the KEK or null (response already sent).
+function requireVaultKek(res, userId) {
+	const kek = vaultSessionService.getKek(userId);
+	if (!kek) {
+		res.status(403).json({ error: 'VAULT_LOCKED' });
+		return null;
+	}
+	return kek;
+}
+
+// Builds the user-facing object for a hidden file from its decrypted enc_meta.
+// file_name stays the obfuscated UUID (display uses display_name; adapters rely
+// on file_name for remote-path fallbacks).
+function decorateHidden(row, meta) {
+	return {
+		...row,
+		display_name: meta.real_name,
+		name: meta.real_name,
+		size: Number(meta.plaintext_size),
+		mime_type: meta.mime_type || 'application/octet-stream',
+		is_hidden: true,
+		capabilities: { starred: false, rename: true, delete: true },
+		createdTime: row.remote_created_time || null,
+		modifiedTime: row.remote_modified_time || null,
+	};
+}
+
 async function deleteContextFile(userId, context, rawId = context?.file?.id, options = {}) {
 	const { sync = true } = options;
 	await context.adapter.deleteFile(context.file);
@@ -181,6 +211,24 @@ async function listSharedWithMeFiles(userId) {
 
 router.get('/files', async (req, res, next) => {
 	try {
+		if (req.query.hidden === '1') {
+			const kek = requireVaultKek(res, req.user.id);
+			if (!kek) return;
+			const metaKey = kekMeta(kek);
+			const files = listHiddenFiles(req.user.id)
+				.map((row) => {
+					try {
+						return decorateHidden(row, decryptMeta(row.enc_meta, metaKey));
+					} catch (error) {
+						// Corrupt/tampered enc_meta — skip the row rather than fail the list.
+						console.error('Failed to decrypt hidden file meta', row.cloud_account_id, row.remote_file_id, error.message);
+						return null;
+					}
+				})
+				.filter(Boolean);
+			return res.json({ data: files });
+		}
+
 		const files = req.query.search
 			? searchFiles(req.user.id, req.query.search, req.query.limit)
 			: req.query.starred === '1'
@@ -286,15 +334,22 @@ router.get('/files/:id', async (req, res, next) => {
 			...details,
 		};
 
-		// Adapter details would re-leak the obfuscated name + ciphertext size;
-		// re-assert the real identity for hidden files.
+		// Adapter details would re-leak the obfuscated name + ciphertext size; for
+		// hidden files, decrypt enc_meta and re-assert the real identity.
 		if (context.file.is_hidden) {
-			data.name = context.file.display_name;
-			data.file_name = context.file.display_name;
-			data.display_name = context.file.display_name;
-			data.size = context.file.size;
-			data.mime_type = context.file.mime_type;
-			data.mimeType = context.file.mime_type;
+			const kek = requireVaultKek(res, req.user.id);
+			if (!kek) return;
+			const enc = getHiddenFile(context.account.id, context.file.remote_file_id);
+			if (!enc || !enc.enc_meta) {
+				return res.status(500).json({ error: 'Encryption metadata for this file is missing' });
+			}
+			const meta = decryptMeta(enc.enc_meta, kekMeta(kek));
+			data.name = meta.real_name;
+			data.file_name = meta.real_name;
+			data.display_name = meta.real_name;
+			data.size = Number(meta.plaintext_size);
+			data.mime_type = meta.mime_type || 'application/octet-stream';
+			data.mimeType = data.mime_type;
 		}
 
 		return res.json({ data });
@@ -309,24 +364,32 @@ router.get('/files/:id/download', async (req, res, next) => {
 		if (!ensureFileContext(context, res)) {
 			return;
 		}
-		const stream = await context.adapter.getDownloadStream(context.file);
-		const displayName = context.file.display_name || context.file.file_name;
 
-		res.setHeader('Content-Disposition', buildContentDisposition('attachment', displayName));
+		if (context.file.is_hidden) {
+			const kek = requireVaultKek(res, req.user.id);
+			if (!kek) return;
+			const enc = getHiddenFile(context.account.id, context.file.remote_file_id);
+			if (!enc || !enc.enc_meta) {
+				return res.status(500).json({ error: 'Encryption metadata for this file is missing' });
+			}
+			// Decrypt meta BEFORE setting headers — content-length must be the
+			// plaintext size, not the ciphertext size.
+			const meta = decryptMeta(enc.enc_meta, kekMeta(kek));
+			const stream = await context.adapter.getDownloadStream(context.file);
+			res.setHeader('Content-Disposition', buildContentDisposition('attachment', meta.real_name));
+			res.setHeader('Content-Type', meta.mime_type || 'application/octet-stream');
+			res.setHeader('Content-Length', String(meta.plaintext_size));
+			stream.pipe(createDecryptStream(unwrapDataKey(enc.wrapped_key, kekWrap(kek)))).pipe(res);
+			return;
+		}
+
+		const stream = await context.adapter.getDownloadStream(context.file);
+		res.setHeader('Content-Disposition', buildContentDisposition('attachment', context.file.file_name));
 		res.setHeader('Content-Type', context.file.mime_type || 'application/octet-stream');
 		if (!context.file.is_folder && context.file.size) {
 			res.setHeader('Content-Length', String(context.file.size));
 		}
-
-		if (context.file.is_hidden) {
-			const enc = getHiddenFile(context.account.id, context.file.remote_file_id);
-			if (!enc) {
-				return res.status(500).json({ error: 'Encryption metadata for this file is missing' });
-			}
-			stream.pipe(createDecryptStream(unwrapDataKey(enc.wrapped_key))).pipe(res);
-		} else {
-			stream.pipe(res);
-		}
+		stream.pipe(res);
 	} catch (error) {
 		next(error);
 	}
@@ -343,7 +406,27 @@ router.get('/files/:id/preview', async (req, res, next) => {
 			return res.status(400).json({ error: 'Folder preview is not supported' });
 		}
 
-		const mimeType = context.file.mime_type || 'application/octet-stream';
+		let mimeType = context.file.mime_type || 'application/octet-stream';
+		let displayName = context.file.file_name;
+		let contentLength = context.file.size;
+		let dataKey = null;
+
+		// For hidden files, decrypt enc_meta FIRST so the previewability check and
+		// Content-Type/Length reflect the real file, not the octet-stream blob.
+		if (context.file.is_hidden) {
+			const kek = requireVaultKek(res, req.user.id);
+			if (!kek) return;
+			const enc = getHiddenFile(context.account.id, context.file.remote_file_id);
+			if (!enc || !enc.enc_meta) {
+				return res.status(500).json({ error: 'Encryption metadata for this file is missing' });
+			}
+			const meta = decryptMeta(enc.enc_meta, kekMeta(kek));
+			mimeType = meta.mime_type || 'application/octet-stream';
+			displayName = meta.real_name;
+			contentLength = Number(meta.plaintext_size);
+			dataKey = unwrapDataKey(enc.wrapped_key, kekWrap(kek));
+		}
+
 		const isPreviewable = /^(image|video|audio|text)\//.test(mimeType)
 			|| mimeType === 'application/pdf'
 			|| mimeType === 'application/json';
@@ -354,18 +437,14 @@ router.get('/files/:id/preview', async (req, res, next) => {
 
 		const stream = await context.adapter.getDownloadStream(context.file);
 
-		res.setHeader('Content-Disposition', buildContentDisposition('inline', context.file.display_name || context.file.file_name));
+		res.setHeader('Content-Disposition', buildContentDisposition('inline', displayName));
 		res.setHeader('Content-Type', mimeType);
-		if (context.file.size) {
-			res.setHeader('Content-Length', String(context.file.size));
+		if (contentLength) {
+			res.setHeader('Content-Length', String(contentLength));
 		}
 
-		if (context.file.is_hidden) {
-			const enc = getHiddenFile(context.account.id, context.file.remote_file_id);
-			if (!enc) {
-				return res.status(500).json({ error: 'Encryption metadata for this file is missing' });
-			}
-			stream.pipe(createDecryptStream(unwrapDataKey(enc.wrapped_key))).pipe(res);
+		if (dataKey) {
+			stream.pipe(createDecryptStream(dataKey)).pipe(res);
 		} else {
 			stream.pipe(res);
 		}
@@ -387,9 +466,23 @@ router.patch('/files/:id/rename', async (req, res, next) => {
 		}
 
 		// Hidden files rename locally only — the provider object must keep its
-		// obfuscated UUID name, and file_encryption.real_name persists on its own.
+		// obfuscated UUID name; we decrypt enc_meta, change real_name, re-encrypt.
 		if (context.file.is_hidden) {
-			updateHiddenFileName(context.account.id, context.file.remote_file_id, name.trim());
+			const kek = requireVaultKek(res, req.user.id);
+			if (!kek) return;
+			const enc = getHiddenFile(context.account.id, context.file.remote_file_id);
+			if (!enc || !enc.enc_meta) {
+				return res.status(500).json({ error: 'Encryption metadata for this file is missing' });
+			}
+			const meta = decryptMeta(enc.enc_meta, kekMeta(kek));
+			updateHiddenFileMeta(
+				context.account.id,
+				context.file.remote_file_id,
+				encryptMeta(
+					{ real_name: name.trim(), plaintext_size: meta.plaintext_size, mime_type: meta.mime_type },
+					kekMeta(kek),
+				),
+			);
 			return res.json({ data: { success: true, local_only: true } });
 		}
 

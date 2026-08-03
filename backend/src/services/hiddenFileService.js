@@ -1,25 +1,18 @@
 import { db } from '../config/database.js';
+import { unwrapDataKey, wrapDataKey } from '../utils/fileEncryption.js';
+import { kekWrap, kekMeta, encryptMeta } from '../utils/vaultCrypto.js';
 
-const INSERT_COLUMNS = `
-  INSERT INTO file_encryption (cloud_account_id, remote_file_id, real_name, plaintext_size, mime_type, wrapped_key)
-  VALUES (@cloud_account_id, @remote_file_id, @real_name, @plaintext_size, @mime_type, @wrapped_key)
-  ON CONFLICT(cloud_account_id, remote_file_id) DO UPDATE SET
-    real_name = excluded.real_name,
-    plaintext_size = excluded.plaintext_size,
-    mime_type = excluded.mime_type,
-    wrapped_key = excluded.wrapped_key,
-    updated_at = CURRENT_TIMESTAMP
-`;
-
-export function storeHiddenFile({ cloud_account_id, remote_file_id, real_name, plaintext_size, mime_type, wrapped_key }) {
-	db.prepare(INSERT_COLUMNS).run({
-		cloud_account_id,
-		remote_file_id,
-		real_name,
-		plaintext_size: Number(plaintext_size || 0),
-		mime_type: mime_type || 'application/octet-stream',
-		wrapped_key,
-	});
+// The real identity lives encrypted in enc_meta; the plaintext columns keep
+// empty placeholders (they're NOT NULL in the original schema) and are unused.
+export function storeHiddenFile({ cloud_account_id, remote_file_id, wrapped_key, enc_meta }) {
+	db.prepare(`
+    INSERT INTO file_encryption (cloud_account_id, remote_file_id, real_name, plaintext_size, mime_type, wrapped_key, enc_meta)
+    VALUES (@cloud_account_id, @remote_file_id, '', 0, NULL, @wrapped_key, @enc_meta)
+    ON CONFLICT(cloud_account_id, remote_file_id) DO UPDATE SET
+      wrapped_key = excluded.wrapped_key,
+      enc_meta = excluded.enc_meta,
+      updated_at = CURRENT_TIMESTAMP
+  `).run({ cloud_account_id, remote_file_id, wrapped_key, enc_meta });
 }
 
 export function getHiddenFile(cloudAccountId, remoteFileId) {
@@ -59,14 +52,14 @@ export function getHiddenFilesForBatch(pairs) {
 	return results;
 }
 
-export function updateHiddenFileName(cloudAccountId, remoteFileId, realName) {
+export function updateHiddenFileMeta(cloudAccountId, remoteFileId, encMeta) {
 	return db
 		.prepare(`
       UPDATE file_encryption
-      SET real_name = ?, updated_at = CURRENT_TIMESTAMP
+      SET enc_meta = ?, updated_at = CURRENT_TIMESTAMP
       WHERE cloud_account_id = ? AND remote_file_id = ?
     `)
-		.run(realName, cloudAccountId, remoteFileId);
+		.run(encMeta, cloudAccountId, remoteFileId);
 }
 
 export function deleteHiddenFile(cloudAccountId, remoteFileId) {
@@ -77,4 +70,45 @@ export function deleteHiddenFile(cloudAccountId, remoteFileId) {
 
 export function clearHiddenForAccount(cloudAccountId) {
 	return db.prepare('DELETE FROM file_encryption WHERE cloud_account_id = ?').run(cloudAccountId);
+}
+
+// Legacy rows (enc_meta IS NULL) were wrapped under env.encryptionKey with
+// plaintext metadata columns. Re-key them under the vault KEK so they appear in
+// the Hidden section after vault setup. Rows that fail to decrypt under the
+// current server key are left untouched (they stay hidden everywhere).
+export function migrateLegacyHiddenFiles(userId, kek) {
+	const accounts = db.prepare('SELECT id FROM cloud_accounts WHERE user_id = ?').all(userId);
+	const wrapKey = kekWrap(kek);
+	const metaKey = kekMeta(kek);
+	let migrated = 0;
+
+	for (const account of accounts) {
+		const legacy = db
+			.prepare('SELECT * FROM file_encryption WHERE cloud_account_id = ? AND enc_meta IS NULL')
+			.all(account.id);
+		for (const row of legacy) {
+			try {
+				const dek = unwrapDataKey(row.wrapped_key); // legacy scheme: server master key
+				const newWrapped = wrapDataKey(dek, wrapKey);
+				const newMeta = encryptMeta(
+					{
+						real_name: row.real_name || '',
+						plaintext_size: Number(row.plaintext_size || 0),
+						mime_type: row.mime_type || 'application/octet-stream',
+					},
+					metaKey,
+				);
+				db.prepare(`
+          UPDATE file_encryption
+          SET wrapped_key = ?, enc_meta = ?, real_name = '', plaintext_size = 0, mime_type = NULL, updated_at = CURRENT_TIMESTAMP
+          WHERE cloud_account_id = ? AND remote_file_id = ?
+        `).run(newWrapped, newMeta, account.id, row.remote_file_id);
+				migrated += 1;
+			} catch {
+				// not decryptable under the current server key — skip
+			}
+		}
+	}
+
+	return migrated;
 }

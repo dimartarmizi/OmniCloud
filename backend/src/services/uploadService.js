@@ -9,6 +9,7 @@ import { getUploadSessionForUser, updateUploadSession, removeUploadSession } fro
 import { syncAccount } from './syncService.js';
 import { isAuthError } from '../utils/providerErrors.js';
 import { createEncryptStream, generateDataKey, wrapDataKey } from '../utils/fileEncryption.js';
+import { kekWrap, kekMeta, encryptMeta } from '../utils/vaultCrypto.js';
 import { storeHiddenFile } from './hiddenFileService.js';
 
 async function pipeUpload({ req, session }) {
@@ -32,7 +33,8 @@ async function pipeUpload({ req, session }) {
 			// as today (never rebuild the encrypt stream or DEK per attempt).
 			const obfuscatedName = session.is_hidden ? randomUUID() : null;
 			const dataKey = session.is_hidden ? generateDataKey() : null;
-			const wrappedKey = session.is_hidden ? wrapDataKey(dataKey) : null;
+			// DEK is wrapped under the vault KEK's wrap sub-key (domain-separated).
+			const wrappedKey = session.is_hidden ? wrapDataKey(dataKey, kekWrap(session.vault_kek)) : null;
 			const effectiveSize = session.effective_size ?? session.size;
 
 			const streamBuffer = new PassThrough();
@@ -101,13 +103,20 @@ async function pipeUpload({ req, session }) {
 				// cloud_account_id + remote_file_id) survives and re-decorates the
 				// file on the next sync that lists it.
 				if (session.is_hidden) {
+					// Real identity (name/size/type) is encrypted under the vault
+					// meta sub-key — never written to plaintext columns.
 					storeHiddenFile({
 						cloud_account_id: account.id,
 						remote_file_id: uploadResponse.remoteFileId,
-						real_name: info.filename,
-						plaintext_size: session.size,
-						mime_type: info.mimeType,
 						wrapped_key: wrappedKey,
+						enc_meta: encryptMeta(
+							{
+								real_name: info.filename,
+								plaintext_size: session.size,
+								mime_type: info.mimeType,
+							},
+							kekMeta(session.vault_kek),
+						),
 					});
 				}
 
