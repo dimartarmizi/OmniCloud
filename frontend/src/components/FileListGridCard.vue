@@ -1,7 +1,7 @@
 <script setup>
 import { computed } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { IconStarFilled } from '@tabler/icons-vue';
+import { IconLock, IconStarFilled } from '@tabler/icons-vue';
 import TruncateMarquee from './TruncateMarquee.vue';
 import { formatBytes, formatDate, getModifiedTime, providerIcon, providerLabel } from '../composables/useFormatFile.js';
 import { getFileIcon } from '../composables/useFileType.js';
@@ -45,7 +45,10 @@ function handleContextMenu(event) {
 				<div class="grid size-12 place-items-center rounded-2xl transition" :class="selected ? 'bg-[#d3e3fd] text-[#1a73e8] shadow-inner dark:bg-sky-500/20 dark:text-sky-300' : highlighted ? 'bg-amber-100 text-amber-500 shadow-inner dark:bg-amber-400/20 dark:text-amber-300' : 'bg-[#f1f3f4] text-[#5f6368] dark:bg-slate-700 dark:text-slate-300'">
 					<component :is="getFileIcon(item, selected || highlighted)" :size="22" :stroke="selected || highlighted ? 0 : 1.8" class="transition-transform duration-200 group-hover:scale-110" />
 				</div>
-				<IconStarFilled v-if="showStar && item.is_starred && item.capabilities?.starred" :size="16" :stroke="0" class="shrink-0 text-amber-400" />
+				<div class="flex shrink-0 items-center gap-1.5">
+					<IconLock v-if="item.is_hidden" :size="14" :stroke="2" class="text-[#9aa0a6] dark:text-slate-500" />
+					<IconStarFilled v-if="showStar && item.is_starred && item.capabilities?.starred" :size="16" :stroke="0" class="shrink-0 text-amber-400" />
+				</div>
 			</div>
 			<div class="min-w-0">
 				<TruncateMarquee as="p" class="text-sm font-semibold text-[#202124] dark:text-slate-100" :text="displayName" />

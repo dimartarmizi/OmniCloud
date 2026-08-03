@@ -137,6 +137,8 @@
 		"searchInFolder": "Search in current folder...",
 		"noFiles": "No files in this folder.",
 		"noOwner": "No owner",
+		"hiddenUpload": "Hidden (encrypted)",
+		"hiddenUploadDesc": "Encrypt the file locally before upload so it is unreadable and shows a random name in the cloud.",
 		"loadingMetadata": "Loading...",
 		"processing": "Processing...",
 		"rename": "Rename",

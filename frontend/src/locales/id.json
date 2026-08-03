@@ -137,6 +137,8 @@
 		"searchInFolder": "Telusuri folder ini...",
 		"noFiles": "Tidak ada file di folder ini.",
 		"noOwner": "Tanpa pemilik",
+		"hiddenUpload": "Tersembunyi (terenkripsi)",
+		"hiddenUploadDesc": "Enkripsi file secara lokal sebelum upload sehingga tidak terbaca dan menampilkan nama acak di cloud.",
 		"loadingMetadata": "Sedang memuat...",
 		"processing": "Memproses...",
 		"rename": "Ganti nama",

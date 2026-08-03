@@ -76,6 +76,19 @@ db.exec(`
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
   );
+
+  CREATE TABLE IF NOT EXISTS file_encryption (
+    cloud_account_id TEXT NOT NULL,
+    remote_file_id TEXT NOT NULL,
+    real_name TEXT NOT NULL,
+    plaintext_size INTEGER NOT NULL DEFAULT 0,
+    mime_type TEXT,
+    wrapped_key TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (cloud_account_id, remote_file_id),
+    FOREIGN KEY(cloud_account_id) REFERENCES cloud_accounts(id) ON DELETE CASCADE
+  );
 `);
 
 db.prepare(`
@@ -97,4 +110,6 @@ db.exec(`
     ON file_metadata(user_id, cloud_account_id);
   CREATE UNIQUE INDEX IF NOT EXISTS idx_user_settings_user_key
     ON user_settings(user_id, key);
+  CREATE INDEX IF NOT EXISTS idx_file_encryption_account
+    ON file_encryption(cloud_account_id);
 `);

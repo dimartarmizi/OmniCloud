@@ -118,9 +118,10 @@ export function useFileActions({
 	async function renameSelectedFile({ trackServerOperation } = {}) {
 		const file = resolveFile();
 		if (!file) return;
-		const nextName = window.prompt(t('drive.newNamePrompt'), file.file_name);
+		const currentName = file.display_name || file.file_name;
+		const nextName = window.prompt(t('drive.newNamePrompt'), currentName);
 		closeContextMenu();
-		if (!nextName?.trim() || nextName.trim() === file.file_name) return;
+		if (!nextName?.trim() || nextName.trim() === currentName) return;
 		errorRef.value = '';
 		try {
 			const task = () => (typeof trackServerOperation === 'function'
@@ -138,7 +139,7 @@ export function useFileActions({
 		if (!targets.length) return;
 
 		const message = targets.length === 1
-			? t('drive.deleteConfirm', { name: targets[0].file_name })
+			? t('drive.deleteConfirm', { name: targets[0].display_name || targets[0].file_name })
 			: t('drive.deleteConfirm', { name: `${targets.length} ${t('common.items')}` });
 
 		const confirmed = window.confirm(message);

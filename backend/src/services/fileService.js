@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import { db } from '../config/database.js';
 import { resolveMimeType } from '../utils/mime.js';
+import { getHiddenFilesForBatch, clearHiddenForAccount } from './hiddenFileService.js';
 
 function normalizePath(input = '/') {
 	if (!input || input === '/') return '/';
@@ -9,16 +10,38 @@ function normalizePath(input = '/') {
 }
 
 function buildDisplayNames(rows) {
-	return rows.map((row) => ({
-		...row,
-		createdTime: row.remote_created_time || null,
-		modifiedTime: row.remote_modified_time || null,
-		capabilities: {
-			starred: row.provider === 'google_drive',
-			rename: true,
-			delete: true,
-		},
-	}));
+	if (!rows.length) return [];
+
+	const hidden = getHiddenFilesForBatch(
+		rows.map((row) => ({ cloud_account_id: row.cloud_account_id, remote_file_id: row.remote_file_id })),
+	);
+	const byKey = new Map(hidden.map((h) => [`${h.cloud_account_id}:${h.remote_file_id}`, h]));
+
+	return rows.map((row) => {
+		const base = {
+			...row,
+			createdTime: row.remote_created_time || null,
+			modifiedTime: row.remote_modified_time || null,
+			capabilities: {
+				starred: row.provider === 'google_drive',
+				rename: true,
+				delete: true,
+			},
+		};
+
+		const enc = byKey.get(`${row.cloud_account_id}:${row.remote_file_id}`);
+		if (enc) {
+			// Real identity lives in file_encryption; file_name stays the obfuscated
+			// provider-side name (adapters use it for remote-path fallbacks).
+			base.display_name = enc.real_name;
+			base.name = enc.real_name;
+			base.size = Number(enc.plaintext_size);
+			base.mime_type = enc.mime_type || base.mime_type;
+			base.is_hidden = true;
+		}
+
+		return base;
+	});
 }
 
 export function listFilesByPath(userId, virtualPath = '/') {
@@ -29,10 +52,12 @@ export function listFilesByPath(userId, virtualPath = '/') {
         fm.*, ca.provider, ca.email
       FROM file_metadata fm
       INNER JOIN cloud_accounts ca ON ca.id = fm.cloud_account_id
+      LEFT JOIN file_encryption fe
+        ON fe.cloud_account_id = fm.cloud_account_id AND fe.remote_file_id = fm.remote_file_id
 			WHERE fm.user_id = ?
 				AND fm.virtual_path = ?
 				AND ca.status = 'active'
-      ORDER BY fm.is_folder DESC, fm.file_name COLLATE NOCASE ASC
+      ORDER BY fm.is_folder DESC, COALESCE(fe.real_name, fm.file_name) COLLATE NOCASE ASC
     `)
 		.all(userId, normalized);
 
@@ -50,17 +75,19 @@ export function searchFiles(userId, term = '', limit = 50) {
         fm.*, ca.provider, ca.email
       FROM file_metadata fm
       INNER JOIN cloud_accounts ca ON ca.id = fm.cloud_account_id
+      LEFT JOIN file_encryption fe
+        ON fe.cloud_account_id = fm.cloud_account_id AND fe.remote_file_id = fm.remote_file_id
 			WHERE fm.user_id = ?
 				AND ca.status = 'active'
-				AND fm.file_name LIKE ? COLLATE NOCASE
+				AND (fm.file_name LIKE ? COLLATE NOCASE OR COALESCE(fe.real_name, '') LIKE ? COLLATE NOCASE)
       ORDER BY
 				CASE WHEN fm.file_name LIKE ? COLLATE NOCASE THEN 0 ELSE 1 END,
 				fm.is_folder DESC,
 				COALESCE(fm.remote_created_time, fm.created_at) DESC,
-				fm.file_name COLLATE NOCASE ASC
+				COALESCE(fe.real_name, fm.file_name) COLLATE NOCASE ASC
 			LIMIT ?
     `)
-		.all(userId, `%${normalizedTerm}%`, `${normalizedTerm}%`, safeLimit);
+		.all(userId, `%${normalizedTerm}%`, `%${normalizedTerm}%`, `${normalizedTerm}%`, safeLimit);
 
 	return buildDisplayNames(rows);
 }
@@ -218,6 +245,7 @@ export function replaceFilesForAccount(userId, cloudAccountId, records) {
 
 export function clearFilesForAccount(userId, cloudAccountId) {
 	db.prepare('DELETE FROM file_metadata WHERE user_id = ? AND cloud_account_id = ?').run(userId, cloudAccountId);
+	clearHiddenForAccount(cloudAccountId);
 }
 
 export function upsertFileMetadata(record) {

@@ -5,10 +5,19 @@ import { createAdapter } from '../services/adapterRegistry.js';
 import { selectBestAccount } from '../services/spaceAllocator.js';
 import { syncAccount } from '../services/syncService.js';
 import { requireAppUser } from '../middleware/authMiddleware.js';
+import { getHiddenFile, updateHiddenFileName, deleteHiddenFile } from '../services/hiddenFileService.js';
+import { unwrapDataKey, createDecryptStream } from '../utils/fileEncryption.js';
 
 const router = Router();
 
 router.use(requireAppUser);
+
+// Real file names are arbitrary user content (quotes, non-ASCII) — emit an
+// ASCII fallback plus an RFC 5987 UTF-8 filename*.
+function buildContentDisposition(type, filename) {
+	const ascii = String(filename).replace(/[^\x20-\x7E]/g, '?').replace(/["\\]/g, '_');
+	return `${type}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(String(filename))}`;
+}
 
 function encodeSharedFileId(accountId, remoteFileId) {
 	return `shared:${accountId}:${Buffer.from(String(remoteFileId)).toString('base64url')}`;
@@ -136,6 +145,10 @@ function ensureFileContext(context, res) {
 async function deleteContextFile(userId, context, rawId = context?.file?.id, options = {}) {
 	const { sync = true } = options;
 	await context.adapter.deleteFile(context.file);
+
+	if (context.file.is_hidden) {
+		deleteHiddenFile(context.account.id, context.file.remote_file_id);
+	}
 
 	if (sync && context.account) {
 		await syncAccount(userId, context.account);
@@ -268,12 +281,23 @@ router.get('/files/:id', async (req, res, next) => {
 		}
 
 		const details = await context.adapter.getFileDetails(context.file);
-		return res.json({
-			data: {
-				...context.file,
-				...details,
-			},
-		});
+		const data = {
+			...context.file,
+			...details,
+		};
+
+		// Adapter details would re-leak the obfuscated name + ciphertext size;
+		// re-assert the real identity for hidden files.
+		if (context.file.is_hidden) {
+			data.name = context.file.display_name;
+			data.file_name = context.file.display_name;
+			data.display_name = context.file.display_name;
+			data.size = context.file.size;
+			data.mime_type = context.file.mime_type;
+			data.mimeType = context.file.mime_type;
+		}
+
+		return res.json({ data });
 	} catch (error) {
 		next(error);
 	}
@@ -286,13 +310,23 @@ router.get('/files/:id/download', async (req, res, next) => {
 			return;
 		}
 		const stream = await context.adapter.getDownloadStream(context.file);
+		const displayName = context.file.display_name || context.file.file_name;
 
-		res.setHeader('Content-Disposition', `attachment; filename="${context.file.file_name}"`);
+		res.setHeader('Content-Disposition', buildContentDisposition('attachment', displayName));
 		res.setHeader('Content-Type', context.file.mime_type || 'application/octet-stream');
 		if (!context.file.is_folder && context.file.size) {
 			res.setHeader('Content-Length', String(context.file.size));
 		}
-		stream.pipe(res);
+
+		if (context.file.is_hidden) {
+			const enc = getHiddenFile(context.account.id, context.file.remote_file_id);
+			if (!enc) {
+				return res.status(500).json({ error: 'Encryption metadata for this file is missing' });
+			}
+			stream.pipe(createDecryptStream(unwrapDataKey(enc.wrapped_key))).pipe(res);
+		} else {
+			stream.pipe(res);
+		}
 	} catch (error) {
 		next(error);
 	}
@@ -320,13 +354,21 @@ router.get('/files/:id/preview', async (req, res, next) => {
 
 		const stream = await context.adapter.getDownloadStream(context.file);
 
-		res.setHeader('Content-Disposition', `inline; filename="${context.file.file_name}"`);
+		res.setHeader('Content-Disposition', buildContentDisposition('inline', context.file.display_name || context.file.file_name));
 		res.setHeader('Content-Type', mimeType);
 		if (context.file.size) {
 			res.setHeader('Content-Length', String(context.file.size));
 		}
 
-		stream.pipe(res);
+		if (context.file.is_hidden) {
+			const enc = getHiddenFile(context.account.id, context.file.remote_file_id);
+			if (!enc) {
+				return res.status(500).json({ error: 'Encryption metadata for this file is missing' });
+			}
+			stream.pipe(createDecryptStream(unwrapDataKey(enc.wrapped_key))).pipe(res);
+		} else {
+			stream.pipe(res);
+		}
 	} catch (error) {
 		next(error);
 	}
@@ -342,6 +384,13 @@ router.patch('/files/:id/rename', async (req, res, next) => {
 		const context = await getFileContext(req.user.id, req.params.id);
 		if (!ensureFileContext(context, res)) {
 			return;
+		}
+
+		// Hidden files rename locally only — the provider object must keep its
+		// obfuscated UUID name, and file_encryption.real_name persists on its own.
+		if (context.file.is_hidden) {
+			updateHiddenFileName(context.account.id, context.file.remote_file_id, name.trim());
+			return res.json({ data: { success: true, local_only: true } });
 		}
 
 		await context.adapter.renameFile(context.file, name.trim());
