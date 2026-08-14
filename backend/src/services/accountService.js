@@ -1,6 +1,12 @@
 import { db } from '../config/database.js';
 import { encryptJson } from '../utils/crypto.js';
 
+export function serializeAccount(account) {
+	if (!account) return account;
+	const { encrypted_credentials, ...safeAccount } = account;
+	return safeAccount;
+}
+
 export function listAccounts(userId) {
 	return db
 		.prepare(`

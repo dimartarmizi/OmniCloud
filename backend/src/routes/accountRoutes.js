@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { deleteAccount, getAccountById, listAccounts } from '../services/accountService.js';
+import { deleteAccount, getAccountById, listAccounts, serializeAccount } from '../services/accountService.js';
 import { env } from '../config/env.js';
 import { requireAppUser } from '../middleware/authMiddleware.js';
 import {
@@ -92,7 +92,7 @@ router.get('/accounts/dropbox/connect', (req, res, next) => {
 router.post('/accounts/mega/connect', async (req, res, next) => {
 	try {
 		const data = await connectMegaAccount(req.user.id, req.body || {});
-		res.json({ data });
+		res.json({ data: { ...data, account: serializeAccount(data.account) } });
 	} catch (error) {
 		next(error);
 	}
@@ -101,7 +101,7 @@ router.post('/accounts/mega/connect', async (req, res, next) => {
 router.post('/accounts/s3/connect', async (req, res, next) => {
 	try {
 		const data = await connectS3Account(req.user.id, req.body || {});
-		res.json({ data });
+		res.json({ data: { ...data, account: serializeAccount(data.account) } });
 	} catch (error) {
 		next(error);
 	}
@@ -110,7 +110,7 @@ router.post('/accounts/s3/connect', async (req, res, next) => {
 router.post('/accounts/pcloud/connect', async (req, res, next) => {
 	try {
 		const data = await connectPCloudAccount(req.user.id, req.body || {});
-		res.json({ data });
+		res.json({ data: { ...data, account: serializeAccount(data.account) } });
 	} catch (error) {
 		next(error);
 	}
